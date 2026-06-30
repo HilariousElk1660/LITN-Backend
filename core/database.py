@@ -1,6 +1,6 @@
 import os
-import asyncpg
 from contextlib import asynccontextmanager
+import asyncpg
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
@@ -12,7 +12,7 @@ async def init_db_pool():
         dsn=DATABASE_URL,
         min_size=1,
         max_size=10,
-        statement_cache_size=0,  # required for Neon's pgbouncer pooled connections
+        statement_cache_size=0,  # required for Neon's pooled connection string
     )
 
 async def close_db_pool():
