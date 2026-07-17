@@ -66,6 +66,7 @@ async def get_book_requests(admin_id:str):
                 "SELECT * FROM book_requests WHERE admin_id = $1",
                 admin_id
             )
+       
         return row
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while fetching book requests: " + str(e))
