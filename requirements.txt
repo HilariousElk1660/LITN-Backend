@@ -17,3 +17,5 @@ python-multipart
 asyncpg
 cloudinary
 ebooklib
+openrouter
+pdf2zh

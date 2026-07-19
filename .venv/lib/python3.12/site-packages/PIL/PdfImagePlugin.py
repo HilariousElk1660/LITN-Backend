@@ -27,7 +27,7 @@ import os
 import time
 from typing import IO, Any
 
-from . import Image, ImageFile, ImageSequence, PdfParser, features
+from . import Image, ImageFile, ImageSequence, PdfParser, __version__, features
 
 #
 # --------------------------------------------------------------------
@@ -148,14 +148,10 @@ def _write_image(
             strip_size=math.ceil(width / 8) * height,
         )
     elif decode_filter == "DCTDecode":
-        from . import JpegImagePlugin
-
-        JpegImagePlugin._save(im, op, filename)
+        Image.SAVE["JPEG"](im, op, filename)
     elif decode_filter == "JPXDecode":
-        from . import Jpeg2KImagePlugin
-
         del dict_obj["BitsPerComponent"]
-        Jpeg2KImagePlugin._save(im, op, filename)
+        Image.SAVE["JPEG2000"](im, op, filename)
     else:
         msg = f"unsupported PDF filter ({decode_filter})"
         raise ValueError(msg)
@@ -225,7 +221,7 @@ def _save(
 
     existing_pdf.start_writing()
     existing_pdf.write_header()
-    existing_pdf.write_comment("created by Pillow PDF driver")
+    existing_pdf.write_comment(f"created by Pillow {__version__} PDF driver")
 
     #
     # pages

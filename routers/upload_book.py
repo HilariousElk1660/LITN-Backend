@@ -69,15 +69,15 @@ async def create_book(
         if book_cover.content_type not in ALLOWED_BOOK_COVER_CONTENT_TYPES:
             raise HTTPException(status_code=400, detail="Only JPEG and PNG cover images are supported")
         
-        #max size:
-        
-        
-        # book_cover_url = await upload_book_cover(book_cover)
+
+        book_cover_url = await upload_book_cover(book_cover)
 
         book_pdf_file = pdf_file
+       
+        pdf_url = uuid.uuid4()
+        book_pdf_url = await upload_book_pdf(pdf_file, pdf_url)
+        await pdf_file.seek(0)
         pdf_bytes = await book_pdf_file.read()
-        # print('bytes:', pdf_bytes) 
-        # return book_cover_url
        
         [new_book_id, new_book_file_id] = await create_book(
             admin_id,
@@ -88,12 +88,10 @@ async def create_book(
             published_date,
             price,
             book_division_type,
-            # book_cover_url
-            "url"
+            book_pdf_url,
+            book_cover_url
         )
 
-        #save pdf
-        # book_pdf_url = await upload_book_pdf(pdf_file)
         book_details = {
             "book_id": new_book_id,
             "book_file_id": new_book_file_id,
@@ -102,6 +100,7 @@ async def create_book(
             "author_name": author_name
 
         }
+        
         background_tasks.add_task(process_book_pdf,book_details, pdf_bytes)
         return {
             "book_id":new_book_id,
@@ -130,12 +129,15 @@ async def upload_book_cover(book_cover: UploadFile) -> str:
         raise HTTPException(status_code=500, detail="Error occurred while uploading book cover: " + str(e))
 
 
-async def upload_book_pdf(pdf_file: UploadFile) -> str:
+async def upload_book_pdf(pdf_file: UploadFile, book_id: str) -> str:
     """
     Upload a book PDF to Cloudinary/S3 and returns book url
     """
     try:
-        book_pdf_details = cloudinary.uploader.upload(pdf_file.file)
+        book_pdf_details = cloudinary.uploader.upload(
+            pdf_file.file,
+            folder=f"books/{book_id}",
+            )
         return book_pdf_details.get("secure_url")
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while uploading book pdf: " + str(e))
@@ -185,28 +187,27 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
  
             try:
                 pages = extract_pdf_text(tmp_path)
-                embedded_images = extract_embedded_images(tmp_path);
-                # print(embedded_images)
+                # embedded_images = extract_embedded_images(tmp_path);
             finally:
                 os.unlink(tmp_path) 
-
-            #save pages in json file:
-       
-
-            
+                   
             #get book divisions using LLM: 
             book_divisions_structure = await divide_into_chapters(pages, book_details["book_division_type"])
             print("successfully got book separation")
+            book_divisions_structure = json.loads(book_divisions_structure)
+            updated = await update_book_file(book_details["book_file_id"],book_divisions_structure["book_structure"]);
+            
+
             # 1. Parse the string into a real Python dictionary
-            parsed_structure = json.loads(book_divisions_structure)
+            # parsed_structure = json.loads(book_divisions_structure)
 
-            # 2. Access the key safely
-            book_divisions = parsed_structure["book_structure"]
+            # # 2. Access the key safely
+            # book_divisions = parsed_structure["book_structure"]
 
-            epub_bytes = build_epub(book_details['book_id'], book_details['book_title'], book_details['author_name'], pages, book_divisions, embedded_images)
-            print('converted pdf to epub')
-            await upload_epub(book_details['book_id'], epub_bytes)
-            print('epub uploaded successfully')
+            # epub_bytes = build_epub(book_details['book_id'], book_details['book_title'], book_details['author_name'], pages, book_divisions, embedded_images)
+            # print('converted pdf to epub')
+            # await upload_epub(book_details['book_id'], epub_bytes)
+            # print('epub uploaded successfully')
         
         return
         def chapter_for_page(page_number: int):
@@ -266,11 +267,7 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
             })
         #saving book divisions and pdf image indexes
         print(pdf_images)
-        updated = await update_book_file(book_details["book_file_id"],book_divisions,pdf_images);
-        print(updated)
-        # if not updated:
-            # logger.error(f"Failed to update book divisions for book_file_id: {book_details['book_file_id']}")
-
+        
            
     except Exception as e:
         logger.exception(f"Error occurred while converting book pdf: {str(e)}")
@@ -511,7 +508,7 @@ async def create_book(
     published_date,
     subscription_price,
     book_division_type: str,
-    # book_url: str,
+    book_pdf_url: str,
     book_cover_url: Optional[str] = None
 ) -> UUID:
     try:
@@ -530,10 +527,11 @@ async def create_book(
                 "pending"
             )  
             new_book_file = await conn.fetch(
-                "INSERT INTO book_files (book_id) VALUES ($1) RETURNING book_file_id",
-                new_book[0]["book_id"]
+                "INSERT INTO book_files (book_id,pdf_file_url) VALUES ($1,$2) RETURNING book_file_id",
+                new_book[0]["book_id"],
+                book_pdf_url
+
             )
-            print(new_book_file[0]["book_file_id"])
             return new_book[0]["book_id"] , new_book_file[0]["book_file_id"]    
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while creating book row: " + str(e))
@@ -542,18 +540,17 @@ async def create_book(
 async def update_book_file(
     book_file_id : UUID,
     book_divisions: List[Dict[str, any]],
-    image_details: List[Dict[str, any]]
 ) -> UUID:
     try:
         async with get_connection() as conn:
             row = await conn.fetch(
-                "UPDATE book_files SET book_divisions = $1, images_details = $2 WHERE book_file_id = $3",
+                # "UPDATE book_files SET book_divisions = $1, images_details = $2 WHERE book_file_id = $3",
+                "UPDATE book_files SET book_divisions = $1 WHERE book_file_id = $2",
                 json.dumps(book_divisions),
-                json.dumps(image_details),
+                # json.dumps(image_details),
                 book_file_id
             )
-
-            return row        
+        return row        
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while updating book file row: " + str(e))
 
