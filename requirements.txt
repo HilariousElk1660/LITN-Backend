@@ -18,3 +18,5 @@ pillow
 python-multipart
 asyncpg
 cloudinary
+ebooklib
+openrouter

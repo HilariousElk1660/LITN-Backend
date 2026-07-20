@@ -66,6 +66,7 @@ async def get_book_requests(admin_id:str):
                 "SELECT * FROM book_requests WHERE admin_id = $1",
                 admin_id
             )
+       
         return row
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while fetching book requests: " + str(e))
@@ -115,7 +116,19 @@ async def update_book(book_id: str, price: float):
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while updating book: " + str(e))
 
-
+@router.get("/admin_books")
+async def get_admin_books(admin_id:str):
+    """Get a list of all books uploaded by a user. can only be accessed by admins"""
+    try:
+        #add logic to check user
+        async with get_connection() as conn:
+            row = await conn.fetch(
+                "SELECT * FROM books WHERE admin_id = $1",
+                admin_id
+            ) 
+        return row
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error occurred while fetching admin books: " + str(e))
 #move to users
 
 class Book_request(BaseModel):
