@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+asyncpg
+passlib[bcrypt]
+PyJWT
+python-dotenv
+pydantic[email]

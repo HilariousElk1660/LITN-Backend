@@ -1,6 +1,9 @@
+from dotenv import load_dotenv
 import os
 from contextlib import asynccontextmanager
 import asyncpg
+
+load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
