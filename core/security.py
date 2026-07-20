@@ -1,7 +1,7 @@
 import os
+import jwt  # PyJWT — imports as jwt, not jose
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
-from jose import jwt, JWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -33,14 +33,12 @@ async def get_current_user(
             "email": payload["email"],
             "role": payload["role"],
         }
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token.",
-        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")
 
 def require_role(*allowed_roles: str):
-    """Dependency factory — usage: Depends(require_role('super-admin'))"""
     async def _check(current_user: dict = Depends(get_current_user)):
         if current_user["role"] not in allowed_roles:
             raise HTTPException(
