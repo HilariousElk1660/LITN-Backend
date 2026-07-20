@@ -19,3 +19,5 @@ cloudinary
 ebooklib
 openrouter
 pdf2zh
+tencentcloud-sdk-python
+# pip install -U tencentcloud-sdk-python

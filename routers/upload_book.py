@@ -22,8 +22,10 @@ import requests
 import json
 import os
 from openrouter import OpenRouter
+import mimetypes
 
-from core.database import get_connection
+# from core.database import get_connection
+from pathlib import Path
 router = APIRouter()
 
 import cloudinary
@@ -54,7 +56,9 @@ async def create_book(
     book_division_type: str = Form(...),
     book_cover: UploadFile = File(...),
     pdf_file: UploadFile = File(...),
-
+    translate_to: Optional[str] = Form("fr"),
+    translate_from: Optional[str]  = Form("en"),
+    # translation_service: str = Form("google"),
 ):
     """ 
     From routers import auth, admin, upload_book
@@ -97,8 +101,10 @@ async def create_book(
             "book_file_id": new_book_file_id,
             "book_division_type": book_division_type,
             "book_title": book_name,
-            "author_name": author_name
-
+            "author_name": author_name,
+            "translate_to": "fr",
+            "translate_from": "en",
+            "translation_service": "google"
         }
         
         background_tasks.add_task(process_book_pdf,book_details, pdf_bytes)
@@ -186,10 +192,64 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
             tmp_path = tmp.name
  
             try:
+                translate_to = 'fr'
+                # book_details.get("translate_to")
+                if translate_to:
+                    logger.info(f"Translation requested to {translate_to} for book {book_details['book_id']}.")
+                    translate_from = book_details.get("translate_from", "en")
+                    service = book_details.get("translation_service", "google")
+                    
+                    try:
+                        # Translate PDF
+                        file_mono, file_dual = translate_pdf(
+                            input_path=tmp_path,
+                            lang_in=translate_from,
+                            lang_out=translate_to,
+                            service=service
+                        )
+                        
+                        # Use the dual translation if it exists, otherwise mono
+                        translated_path = file_dual if os.path.exists(file_dual) else file_mono
+                        
+                        if os.path.exists(translated_path):
+                            # Upload translated PDF to Cloudinary
+                            with open(translated_path, "rb") as f:
+                                result = cloudinary.uploader.upload(
+                                    f,
+                                    folder=f"books/{book_details['book_id']}-{translate_to}",
+                                )
+                                new_pdf_url = result.get("secure_url")
+                                
+                            # Update database URL
+                            await update_book_pdf_url(book_details["book_file_id"], new_pdf_url)
+                            logger.info(f"Successfully uploaded translated PDF: {new_pdf_url}")
+                            
+                            # Read the translated PDF bytes to use for text extraction
+                            with open(translated_path, "rb") as tf:
+                                pdf_bytes = tf.read()
+                                
+                            # Update the file path to be processed
+                            tmp_path = translated_path
+                            
+                            # Clean up translation files we created
+                            try:
+                                if os.path.exists(file_mono):
+                                    os.unlink(file_mono)
+                                if os.path.exists(file_dual):
+                                    os.unlink(file_dual)
+                            except Exception as e:
+                                logger.error(f"Error cleaning up translated temp files: {e}")
+                    except Exception as e:
+                        logger.error(f"Translation failed inside process_book_pdf: {e}", exc_info=True)
+
                 pages = extract_pdf_text(tmp_path)
                 # embedded_images = extract_embedded_images(tmp_path);
             finally:
-                os.unlink(tmp_path) 
+                try:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                except Exception:
+                    pass 
                    
             #get book divisions using LLM: 
             book_divisions_structure = await divide_into_chapters(pages, book_details["book_division_type"])
@@ -554,6 +614,19 @@ async def update_book_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while updating book file row: " + str(e))
 
+
+async def update_book_pdf_url(book_file_id: UUID, pdf_file_url: str):
+    try:
+        async with get_connection() as conn:
+            await conn.execute(
+                "UPDATE book_files SET pdf_file_url = $1 WHERE book_file_id = $2",
+                pdf_file_url,
+                book_file_id
+            )
+    except Exception as e:
+        logger.error(f"Error updating book pdf url in DB: {e}")
+
+
 #-------------------------------------------- *CHAPTER DIVISION* ---------------------------------------------------
 api_key = os.getenv("OPENROUTER_API_KEY")
 model = os.getenv("OPENROUTER_MODEL")
@@ -839,4 +912,54 @@ async def upload_embedded_image(book_id, image: ExtractedImage) -> str:
             status_code=500,
             detail=f"Error occurred while uploading embedded image (page {image.page_number}): {e}",
         )
- 
+
+
+def translate_pdf(
+    input_path: str,
+    lang_in: str = "en",
+    lang_out: str = "zh",
+) -> tuple[str, str]:
+    """
+    Translate a single PDF and return paths to the (mono, dual) output files.
+    """
+
+    pdf_url = input_path
+    local_filename = 'downloaded_book.pdf'
+    otranslate_api_key = os.getenv('OTRANSLATOR_API_KEY')
+    print(otranslate_api_key)
+
+    res = requests.get(pdf_url)
+    with open(local_filename, 'wb') as f:
+        f.write(res.content)
+
+    api_url = 'https://otranslator.com/api/v1/translation/create'
+    headers = {
+        'Authorization': otranslate_api_key,
+    }
+    mime_type, _ = mimetypes.guess_type(local_filename)
+    with open(local_filename, 'rb') as f:
+        files = {
+            'file': (local_filename, f, mime_type or 'application/pdf'),
+        }
+        data = {
+            'fromLang': lang_in,
+            'toLang': lang_out,
+            'outputFormat': 'PDF',
+            # 'bilingualMode': 'Horizontal',
+            'preview':True,
+
+        }
+        try:
+            response = requests.post(api_url, headers=headers, data=data, files=files)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"Error during translation request: {e}")
+            # If it's a connection or SSL error with large files, it might be due to server rejecting it early (e.g. 402 Insufficient credits)
+            print("Note: If you encounter an SSL/EOF error on large files, it often means the server rejected the request early (e.g., due to insufficient credits or invalid API key) and terminated the connection.")
+            return None
+    print(response.text)
+    return response
+
+if __name__ == "__main__":
+    translate_pdf("https://res.cloudinary.com/dcvpbxqob/image/upload/v1784479707/books/cc690c92-52dd-4ceb-bbae-d1928d8d1d2e/qoiopmsklcwxmarhh6qh.pdf","English","French")
+
