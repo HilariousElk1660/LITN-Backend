@@ -2,6 +2,9 @@ from dotenv import load_dotenv
 import os
 from contextlib import asynccontextmanager
 import asyncpg
+from dotenv import load_dotenv 
+
+load_dotenv()
 
 load_dotenv()
 
