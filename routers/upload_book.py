@@ -23,8 +23,9 @@ import json
 import os
 from openrouter import OpenRouter
 import mimetypes
+import time
 
-# from core.database import get_connection
+from core.database import get_connection
 from pathlib import Path
 router = APIRouter()
 
@@ -54,11 +55,9 @@ async def create_book(
     published_date: str = Form(...),
     price: Decimal = Form(...),
     book_division_type: str = Form(...),
-    book_cover: UploadFile = File(...),
     pdf_file: UploadFile = File(...),
     translate_to: Optional[str] = Form("fr"),
     translate_from: Optional[str]  = Form("en"),
-    # translation_service: str = Form("google"),
 ):
     """ 
     From routers import auth, admin, upload_book
@@ -70,11 +69,6 @@ async def create_book(
         if pdf_file.content_type not in ALLOWED_BOOK_CONTENT_TYPES:
             raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
-        if book_cover.content_type not in ALLOWED_BOOK_COVER_CONTENT_TYPES:
-            raise HTTPException(status_code=400, detail="Only JPEG and PNG cover images are supported")
-        
-
-        book_cover_url = await upload_book_cover(book_cover)
 
         book_pdf_file = pdf_file
        
@@ -91,9 +85,7 @@ async def create_book(
             category,
             published_date,
             price,
-            book_division_type,
-            book_pdf_url,
-            book_cover_url
+            book_division_type
         )
 
         book_details = {
@@ -102,9 +94,9 @@ async def create_book(
             "book_division_type": book_division_type,
             "book_title": book_name,
             "author_name": author_name,
-            "translate_to": "fr",
-            "translate_from": "en",
-            "translation_service": "google"
+            "translate_to": translate_to,
+            "translate_from": translate_from,
+            "book_pdf_url": book_pdf_url
         }
         
         background_tasks.add_task(process_book_pdf,book_details, pdf_bytes)
@@ -185,6 +177,7 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
     Uses its own DB session since BackgroundTasks run outside the original
     request's dependency-injected session lifecycle.
     """
+    status = "pending"
     try:
         #extracting pdf
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -192,58 +185,8 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
             tmp_path = tmp.name
  
             try:
-                translate_to = 'fr'
-                # book_details.get("translate_to")
-                if translate_to:
-                    logger.info(f"Translation requested to {translate_to} for book {book_details['book_id']}.")
-                    translate_from = book_details.get("translate_from", "en")
-                    service = book_details.get("translation_service", "google")
-                    
-                    try:
-                        # Translate PDF
-                        file_mono, file_dual = translate_pdf(
-                            input_path=tmp_path,
-                            lang_in=translate_from,
-                            lang_out=translate_to,
-                            service=service
-                        )
-                        
-                        # Use the dual translation if it exists, otherwise mono
-                        translated_path = file_dual if os.path.exists(file_dual) else file_mono
-                        
-                        if os.path.exists(translated_path):
-                            # Upload translated PDF to Cloudinary
-                            with open(translated_path, "rb") as f:
-                                result = cloudinary.uploader.upload(
-                                    f,
-                                    folder=f"books/{book_details['book_id']}-{translate_to}",
-                                )
-                                new_pdf_url = result.get("secure_url")
-                                
-                            # Update database URL
-                            await update_book_pdf_url(book_details["book_file_id"], new_pdf_url)
-                            logger.info(f"Successfully uploaded translated PDF: {new_pdf_url}")
-                            
-                            # Read the translated PDF bytes to use for text extraction
-                            with open(translated_path, "rb") as tf:
-                                pdf_bytes = tf.read()
-                                
-                            # Update the file path to be processed
-                            tmp_path = translated_path
-                            
-                            # Clean up translation files we created
-                            try:
-                                if os.path.exists(file_mono):
-                                    os.unlink(file_mono)
-                                if os.path.exists(file_dual):
-                                    os.unlink(file_dual)
-                            except Exception as e:
-                                logger.error(f"Error cleaning up translated temp files: {e}")
-                    except Exception as e:
-                        logger.error(f"Translation failed inside process_book_pdf: {e}", exc_info=True)
-
                 pages = extract_pdf_text(tmp_path)
-                # embedded_images = extract_embedded_images(tmp_path);
+                embedded_images = extract_embedded_images(tmp_path);
             finally:
                 try:
                     if os.path.exists(tmp_path):
@@ -254,9 +197,41 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
             #get book divisions using LLM: 
             book_divisions_structure = await divide_into_chapters(pages, book_details["book_division_type"])
             print("successfully got book separation")
+
             book_divisions_structure = json.loads(book_divisions_structure)
-            updated = await update_book_file(book_details["book_file_id"],book_divisions_structure["book_structure"]);
+        
+            #translate pdf
+            translation_url = translate_pdf(book_details["book_pdf_url"],book_details["translate_to"])
+            print("successfully translated pdf")
+            translation_details = {
+                book_details["translate_from"]: book_details["book_pdf_url"],
+                book_details["translate_to"]: translation_url
+            }
             
+            book_cover_url = None
+            #save book cover
+            for image in embedded_images:
+                image_key = (
+                    f"books/{book_details['book_id']}/images/page_{image.page_number}_{image.image_index}.{image.ext}"
+                )
+                try:
+                    book_cover_url = await upload_embedded_image(book_details['book_id'], image)
+                    print(f"Embedded image URL for page {image.page_number}: {book_cover_url}")
+                    break
+                        
+                except Exception as e:
+                    # Log and continue -- one failed image upload shouldn't
+                    # fail the entire book processing run.
+                    logger.exception(
+                        "Failed to upload embedded image page=%s index=%s book_id=%s",
+                        image.page_number, image.image_index, book_details['book_id'],
+                    )
+                    continue
+            
+            # print(book_cover_url)
+            updated = await update_book_file(book_details["book_file_id"],book_divisions_structure["book_structure"], translation_details, book_cover_url);
+            print("successfully updated book file")
+            status = "completed"
 
             # 1. Parse the string into a real Python dictionary
             # parsed_structure = json.loads(book_divisions_structure)
@@ -330,8 +305,11 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
         
            
     except Exception as e:
+        status="failed"
         logger.exception(f"Error occurred while converting book pdf: {str(e)}")
-
+    finally:
+        await update_book_status(status, book_details['book_id'])
+        # pass
 from ebooklib import epub
 import html
 
@@ -568,18 +546,15 @@ async def create_book(
     published_date,
     subscription_price,
     book_division_type: str,
-    book_pdf_url: str,
-    book_cover_url: Optional[str] = None
 ) -> UUID:
     try:
         async with get_connection() as conn:
             new_book = await conn.fetch(
-                "INSERT INTO books (admin_id, uploaded_by, author_name, book_name,book_cover_url, category, published_date, subscription_price, book_division_type, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING book_id",
+                "INSERT INTO books (admin_id, uploaded_by, author_name, book_name, category, published_date, subscription_price, book_division_type, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING book_id",
                 admin_id,
                 uploaded_by,
                 author_name,
                 book_name,
-                book_cover_url,
                 category,
                 published_date,
                 subscription_price,
@@ -587,10 +562,8 @@ async def create_book(
                 "pending"
             )  
             new_book_file = await conn.fetch(
-                "INSERT INTO book_files (book_id,pdf_file_url) VALUES ($1,$2) RETURNING book_file_id",
+                "INSERT INTO book_files (book_id) VALUES ($1) RETURNING book_file_id",
                 new_book[0]["book_id"],
-                book_pdf_url
-
             )
             return new_book[0]["book_id"] , new_book_file[0]["book_file_id"]    
     except Exception as e:
@@ -600,15 +573,22 @@ async def create_book(
 async def update_book_file(
     book_file_id : UUID,
     book_divisions: List[Dict[str, any]],
+    translation_details: Dict[str, any],
+    book_cover_url: Optional[str] = None
 ) -> UUID:
     try:
         async with get_connection() as conn:
             row = await conn.fetch(
-                # "UPDATE book_files SET book_divisions = $1, images_details = $2 WHERE book_file_id = $3",
-                "UPDATE book_files SET book_divisions = $1 WHERE book_file_id = $2",
+                "UPDATE book_files SET book_divisions = $1,pdf_file_url = $2 WHERE book_file_id = $3 RETURNING book_id",
                 json.dumps(book_divisions),
-                # json.dumps(image_details),
+                json.dumps(translation_details),
                 book_file_id
+            )
+            book_id = row[0]["book_id"]
+            row2 = await conn.fetch(
+                "UPDATE books SET book_cover_url = $1 WHERE book_id = $2",
+                book_cover_url,
+                book_id
             )
         return row        
     except Exception as e:
@@ -626,6 +606,16 @@ async def update_book_pdf_url(book_file_id: UUID, pdf_file_url: str):
     except Exception as e:
         logger.error(f"Error updating book pdf url in DB: {e}")
 
+async def update_book_status(status:str,book_id: UUID):
+    try:
+        async with get_connection() as conn:
+            await conn.execute(
+                "UPDATE books SET status = $1 WHERE book_id = $2",
+                status,
+                book_id
+            )
+    except Exception as e:
+        logger.error(f"Error updating book status in DB: {e}")
 
 #-------------------------------------------- *CHAPTER DIVISION* ---------------------------------------------------
 api_key = os.getenv("OPENROUTER_API_KEY")
@@ -914,52 +904,117 @@ async def upload_embedded_image(book_id, image: ExtractedImage) -> str:
         )
 
 
+
+
+LANG_CODE_MAP = {
+    "english": "EN",
+    "french": "FR",
+    "german": "DE",
+    "chinese": "ZH",
+    "spanish": "ES",
+    "portuguese": "PT-PT",
+    "italian": "IT",
+    "japanese": "JA",
+}
+
+
+def normalize_lang(lang: str) -> str:
+    key = lang.strip().lower()
+    return LANG_CODE_MAP.get(key, lang.upper())
+
+
 def translate_pdf(
     input_path: str,
-    lang_in: str = "en",
     lang_out: str = "zh",
-) -> tuple[str, str]:
+    cloudinary_folder: str = "books/translated",
+) -> str:
     """
-    Translate a single PDF and return paths to the (mono, dual) output files.
+    Translate a single PDF via DeepL, upload the translated file to Cloudinary,
+    and return the Cloudinary secure URL.
     """
+    deepl_api_key = os.getenv("DEEPL_API_KEY")
+    if not deepl_api_key:
+        raise RuntimeError("DEEPL_API_KEY environment variable not set")
 
-    pdf_url = input_path
-    local_filename = 'downloaded_book.pdf'
-    otranslate_api_key = os.getenv('OTRANSLATOR_API_KEY')
-    print(otranslate_api_key)
+    base_url = (
+        "https://api-free.deepl.com"
+        if deepl_api_key.endswith(":fx")
+        else "https://api.deepl.com"
+    )
 
-    res = requests.get(pdf_url)
-    with open(local_filename, 'wb') as f:
+    local_filename = "downloaded_book.pdf"
+
+    # Download source PDF
+    res = requests.get(input_path)
+    res.raise_for_status()
+    with open(local_filename, "wb") as f:
         f.write(res.content)
 
-    api_url = 'https://otranslator.com/api/v1/translation/create'
-    headers = {
-        'Authorization': otranslate_api_key,
-    }
+    headers = {"Authorization": f"DeepL-Auth-Key {deepl_api_key}"}
     mime_type, _ = mimetypes.guess_type(local_filename)
-    with open(local_filename, 'rb') as f:
-        files = {
-            'file': (local_filename, f, mime_type or 'application/pdf'),
-        }
+
+    # 1. Upload document to DeepL
+    with open(local_filename, "rb") as f:
+        files = {"file": (local_filename, f, mime_type or "application/pdf")}
         data = {
-            'fromLang': lang_in,
-            'toLang': lang_out,
-            'outputFormat': 'PDF',
-            # 'bilingualMode': 'Horizontal',
-            'preview':True,
-
+            "target_lang": normalize_lang(lang_out),
+            # "source_lang": normalize_lang(lang_in),
         }
-        try:
-            response = requests.post(api_url, headers=headers, data=data, files=files)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            print(f"Error during translation request: {e}")
-            # If it's a connection or SSL error with large files, it might be due to server rejecting it early (e.g. 402 Insufficient credits)
-            print("Note: If you encounter an SSL/EOF error on large files, it often means the server rejected the request early (e.g., due to insufficient credits or invalid API key) and terminated the connection.")
-            return None
-    print(response.text)
-    return response
+        resp = requests.post(
+            f"{base_url}/v2/document", headers=headers, data=data, files=files
+        )
 
-if __name__ == "__main__":
-    translate_pdf("https://res.cloudinary.com/dcvpbxqob/image/upload/v1784479707/books/cc690c92-52dd-4ceb-bbae-d1928d8d1d2e/qoiopmsklcwxmarhh6qh.pdf","English","French")
+    if not resp.ok:
+        print("DeepL error response:", resp.text)
+    resp.raise_for_status()
+
+    job = resp.json()
+    document_id = job["document_id"]
+    document_key = job["document_key"]
+
+    # 2. Poll for completion
+    status_url = f"{base_url}/v2/document/{document_id}"
+    while True:
+        status_resp = requests.post(
+            status_url, headers=headers, data={"document_key": document_key}
+        )
+        status_resp.raise_for_status()
+        status = status_resp.json()
+
+        if status["status"] == "done":
+            break
+        if status["status"] == "error":
+            raise RuntimeError(f"DeepL translation failed: {status}")
+
+        time.sleep(status.get("seconds_remaining", 5))
+
+    # 3. Download translated result
+    result_url = f"{base_url}/v2/document/{document_id}/result"
+    result_resp = requests.post(
+        result_url, headers=headers, data={"document_key": document_key}
+    )
+    result_resp.raise_for_status()
+
+    translated_local_path = "translated_" + local_filename
+    with open(translated_local_path, "wb") as f:
+        f.write(result_resp.content)
+
+    # 4. Upload translated PDF to Cloudinary
+    upload_result = cloudinary.uploader.upload(
+        translated_local_path,
+        resource_type="image",  # matches how your original PDF was uploaded (/image/upload/)
+        folder=cloudinary_folder,
+        use_filename=True,
+        unique_filename=True,
+        overwrite=False,
+    )
+
+    # 5. Clean up local temp files
+    for path in (local_filename, translated_local_path):
+        if os.path.exists(path):
+            os.remove(path)
+
+    return upload_result["secure_url"]
+
+# translate_pdf("https://res.cloudinary.com/dcvpbxqob/image/upload/v1784389820/books/3fef4149-53e2-45fc-bf95-d488dad11e67/id1p2tddjbzkkay3fein.pdf","EN","FR")
 
