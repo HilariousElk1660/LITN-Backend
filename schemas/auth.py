@@ -1,13 +1,21 @@
 from pydantic import BaseModel, EmailStr, Field
 
 class SignupRequest(BaseModel):
+    fullname: str
     email: EmailStr
-    password: str = Field(min_length=6)
-    fullname: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=8, max_length=72)
 
 class SigninRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=72)
+
+class ProfileUpdateRequest(BaseModel):
+    fullname: str
+    email: EmailStr
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(max_length=72)
+    password: str = Field(min_length=8, max_length=72)
 
 class AuthResponse(BaseModel):
     user_id: str
