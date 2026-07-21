@@ -24,7 +24,7 @@ import os
 from openrouter import OpenRouter
 import mimetypes
 
-# from core.database import get_connection
+from core.database import get_connection
 from pathlib import Path
 router = APIRouter()
 
