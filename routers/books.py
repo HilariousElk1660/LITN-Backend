@@ -3,6 +3,7 @@ import re
 from fastapi import APIRouter, HTTPException, status, Depends
 from core.database import get_connection
 from core.security import require_role
+from core.security import get_current_user
 
 router = APIRouter(tags=["books"])
 
@@ -62,6 +63,27 @@ async def delete_book(
         )
     
 
+@router.get("/book/{book_id}")
+async def get_book_details(book_id: str):
+    """
+    Retrieve details of a specific book by its ID.
+    """
+    try:
+        #add logic to check user
+        async with get_connection() as conn:
+            book_details = await conn.fetch(
+                "SELECT * FROM books WHERE book_id = $1",
+                book_id
+            )
+            book_file_details = await conn.fetch(
+                "SELECT * FROM book_files WHERE book_id = $1",
+                book_id
+            )
+        return {**book_details[0], **book_file_details[0]}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error occurred while fetching book details: " + str(e))
+
 @router.get("/read_book/{book_id}")
 async def readbook(book_id:str):
     async with get_connection() as conn:
@@ -75,7 +97,7 @@ async def get_reading_progress(reader_id:str, book_id:str):
     print("here")
     async with get_connection() as conn:
         result = await conn.fetch(
-            "SELECT * FROM reading_progress WHERE book_id = $1  AND reader_id = $2", 
+            "SELECT * FROM readers_books WHERE book_id = $1  AND user_id = $2", 
             book_id,
             reader_id
         )
@@ -86,17 +108,26 @@ async def get_reading_progress(reader_id:str, book_id:str):
 
 @router.post("/save_reading_progress")
 async def save_reading_progress(reader_id:str, book_id:str, page_stopped_at:int):
+    
     async with get_connection() as conn:
         result = await conn.fetch(
             """
-            INSERT INTO reading_progress (page_stopped_at, book_id, reader_id)
+            INSERT INTO readers_books (current_page, book_id, user_id)
             VALUES ($1, $2, $3)
-            ON CONFLICT (book_id, reader_id)
-            DO UPDATE SET page_stopped_at = EXCLUDED.page_stopped_at
+            ON CONFLICT (book_id, user_id)
+            DO UPDATE SET current_page = EXCLUDED.current_page
             """, 
-            str(page_stopped_at),
+            page_stopped_at,
             book_id, 
-            reader_id
+            reader_id,
         )
     print(result)
+    return result
+
+@router.get("/readers_requests")
+async def readbook(current_user: dict = Depends(get_current_user)):
+    async with get_connection() as conn:
+        result = await conn.fetch(
+            "SELECT * FROM book_requests WHERE reader_id = $1", current_user["user_id"]
+        )
     return result

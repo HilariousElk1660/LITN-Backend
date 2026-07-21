@@ -1,4 +1,5 @@
 PyJWT
+jwt
 pydantic[email]
 fastapi>=0.137.2
 uvicorn>=0.49.0
@@ -10,13 +11,16 @@ asyncpg>=0.28.0
 python-dotenv==1.1.1
 passlib[bcrypt]>=1.7.4
 python-jose>=3.3.0
-boto3
-PyMuPDF
-pdfplumber
-pytesseract
-pillow
 python-multipart
 asyncpg
 cloudinary
 ebooklib
 openrouter
+bcrypt
+# boto3
+PyMuPDF
+pdfplumber
+pytesseract
+pillow
+fitz
+
