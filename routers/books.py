@@ -21,6 +21,7 @@ async def all_books():
         )
     return [dict(r) for r in rows]
 
+
 @router.get("/readers_books/{user_id}")
 async def readers_books(user_id: str):
     async with get_connection() as conn:
@@ -47,6 +48,7 @@ async def readers_books(user_id: str):
         )
     return [dict(r) for r in rows]
 
+
 @router.delete("/delete_book/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_book(
     book_id: str,
@@ -56,12 +58,12 @@ async def delete_book(
         result = await conn.execute(
             "DELETE FROM books WHERE book_id = $1", book_id
         )
-    if result == "DELETE 0":
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Book not found.",
-        )
-    
+        if result == "DELETE 0":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Book not found.",
+            )
+
 
 @router.get("/book/{book_id}")
 async def get_book_details(book_id: str):
@@ -85,26 +87,31 @@ async def get_book_details(book_id: str):
         raise HTTPException(status_code=500, detail="Error occurred while fetching book details: " + str(e))
 
 @router.get("/read_book/{book_id}")
-async def readbook(book_id:str):
+async def readbook(book_id: str):
     async with get_connection() as conn:
         result = await conn.fetch(
             "SELECT * FROM book_files WHERE book_id = $1", book_id
         )
-    return result[0]
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Book file not found.",
+            )
+        return result[0]
+
 
 @router.get("/reading_progress")
-async def get_reading_progress(reader_id:str, book_id:str):
-    print("here")
+async def get_reading_progress(reader_id: str, book_id: str):
     async with get_connection() as conn:
         result = await conn.fetch(
             "SELECT * FROM readers_books WHERE book_id = $1  AND user_id = $2", 
             book_id,
-            reader_id
+            reader_id,
         )
-   
-    if result:    
-        return result[0]
-    return {}
+        if result:
+            return result[0]
+        return {}
+
 
 @router.post("/save_reading_progress")
 async def save_reading_progress(reader_id:str, book_id:str, page_stopped_at:int):
