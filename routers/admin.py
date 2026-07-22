@@ -11,12 +11,15 @@ from core.security import get_current_user
 
 from pydantic import BaseModel
 from core.database import get_connection
+from core.security import require_role
 router = APIRouter()
 
 
 
 @router.get("/admins")
-async def get_admin(user_id: str):
+async def get_admin(
+    current_user: dict = Depends(require_role("admin", "super-admin")),
+):
     """
     Get a list of all admins and super admins. can only be accessed by admins
     """
@@ -26,35 +29,86 @@ async def get_admin(user_id: str):
         
         async with get_connection() as conn:
             row = await conn.fetch(
-                "SELECT fullname,email,role FROM users WHERE role = 'admin' OR role = 'super_admin'"
+                "SELECT fullname,email,role FROM users WHERE role = 'admin' OR role = 'super-admin'"
             )
 
         return row 
     except (Exception) as e:
         raise HTTPException(status_code=500, detail="Error occurred while fetching admins")
 
+class RoleChangeRequest(BaseModel):
+    email: str
+    role: str
+
+
 @router.patch("/change_role")
-async def change_user_role(email: str, role: str):
+async def change_user_role(
+    email: str = None,
+    role: str = None,
+    current_user: dict = Depends(require_role("admin", "super-admin")),
+):
     """
     Change the role of a user. can only be accessed by admins
     email of the user whose role needs to be changed
     """
     try:
-        #add logic to check user
+        print(email,role)
+        if role == 'superadmin':
+            role = 'super-admin'
+
+        valid_roles = ["reader", "admin", "super-admin"]
+        if role not in valid_roles:
+            raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
 
         async with get_connection() as conn:
-            updated_user = await conn.fetch(
+            # First check if user exists
+            user = await conn.fetchrow(
+                "SELECT user_id, fullname FROM users WHERE email = $1",
+                email,
+            )
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            # Update user role
+            updated_user = await conn.fetchrow(
                 "UPDATE users SET role = $1 WHERE email = $2 RETURNING fullname",
                 role,
-                email
+                email,
             )
+
         if updated_user:
-            return {"message": "User role updated successfully"}
+            return {"message": f"User role updated to {role} successfully", "fullname": updated_user['fullname']}
         else:
-            raise HTTPException(status_code=404, detail="User not found")
-         
+            raise HTTPException(status_code=404, detail="Failed to update user role")
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while changing user role: " + str(e))
+
+
+
+class PromoteUserRequest(BaseModel):
+    email: str
+    role: str = "admin"
+
+
+@router.post("/promote_user")
+async def promote_user(
+    payload: Optional[PromoteUserRequest] = Body(None),
+    email: Optional[str] = None,
+    role: Optional[str] = None,
+    current_user: dict = Depends(require_role("admin", "super-admin")),
+):
+    """
+    Promote a user to admin or super-admin. Alias for change_role with better naming.
+    """
+    if payload is None:
+        if email is None or role is None:
+            raise HTTPException(status_code=400, detail="email and role are required")
+        payload = PromoteUserRequest(email=email, role=role)
+
+    return await change_user_role(payload)
     
 
 @router.get("/book_requests")
