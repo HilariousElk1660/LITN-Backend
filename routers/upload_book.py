@@ -229,7 +229,7 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
                     continue
             
             # print(book_cover_url)
-            updated = await update_book_file(book_details["book_file_id"],book_divisions_structure["book_structure"], translation_details, book_cover_url);
+            updated = await update_book_file(book_details["book_file_id"],book_divisions_structure["book_structure"], translation_details, book_cover_url,len(pages));
             print("successfully updated book file")
             status = "completed"
 
@@ -574,7 +574,8 @@ async def update_book_file(
     book_file_id : UUID,
     book_divisions: List[Dict[str, any]],
     translation_details: Dict[str, any],
-    book_cover_url: Optional[str] = None
+    book_cover_url: Optional[str] = None,
+    total_pages: int = 0
 ) -> UUID:
     try:
         async with get_connection() as conn:
@@ -586,8 +587,10 @@ async def update_book_file(
             )
             book_id = row[0]["book_id"]
             row2 = await conn.fetch(
-                "UPDATE books SET book_cover_url = $1 WHERE book_id = $2",
+                "UPDATE books SET book_cover_url = $1,pages = $2,chapters = $3 WHERE book_id = $4",
                 book_cover_url,
+                total_pages,
+                len(book_divisions),
                 book_id
             )
         return row        

@@ -131,8 +131,7 @@ async def update_book_request(
                 status,
                 request_id
             )
-
-
+        print(row)
         if row:
             return {"message": "Book request updated successfully"}
         else:
@@ -188,7 +187,7 @@ class Book_request(BaseModel):
 
 
 @router.post("/book_request")
-async def send_book_request( book_request: Book_request, current_user: dict = Depends(get_current_user) ):
+async def send_book_request( book_request: Book_request):
     """
     Send a book request to book admin
     """
@@ -209,9 +208,9 @@ async def send_book_request( book_request: Book_request, current_user: dict = De
             )
 
         if row:
-            return {"message": "Book request sent successfully", "new_request":row}
+            return {"message": "Book request sent successfully","new_request":row}
         else:
-            raise HTTPException(status_code=404, detail="Could not create book request")
+            raise HTTPException(status_code=404, detail="Book not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while sending book request: " + str(e))
 

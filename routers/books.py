@@ -13,7 +13,7 @@ async def all_books():
         rows = await conn.fetch(
             """
             SELECT book_id, book_name, author_name, book_cover_url,
-                   book_url, category, pages, chapters,
+                   category, pages, chapters,
                    subscription_price, status, published_date, created_at
             FROM books
             ORDER BY created_at DESC
@@ -124,6 +124,13 @@ async def save_reading_progress(reader_id:str, book_id:str, page_stopped_at:int)
     print(result)
     return result
 
+@router.get("/readers_requests")
+async def readbook(current_user: dict = Depends(get_current_user)):
+    async with get_connection() as conn:
+        result = await conn.fetch(
+            "SELECT * FROM book_requests WHERE reader_id = $1", current_user["user_id"]
+        )
+    return result
 
 @router.get("/book/{book_id}")
 async def get_book_details(book_id: str):
