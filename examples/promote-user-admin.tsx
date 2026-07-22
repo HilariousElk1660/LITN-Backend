@@ -5,7 +5,7 @@ const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_BASE_URL || "http://localh
 
 function normalizeRole(role: string) {
   const normalized = role.toLowerCase().replace(/[-\s]/g, "_");
-  return normalized === "superadmin" ? "super_admin" : normalized;
+  return normalized === "superadmin" ? "super-admin" : normalized;
 }
 
 export async function promoteUserToRole(email: string, role: string, token: string) {

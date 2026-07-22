@@ -2,7 +2,7 @@ const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || "http://localhost:8000"
 
 function normalizeRole(role: string) {
   const normalized = role.toLowerCase().replace(/[-\s]/g, "_");
-  return normalized === "superadmin" ? "super_admin" : normalized;
+  return normalized === "superadmin" ? "super-admin" : normalized;
 }
 
 export async function promoteUserViaBackend(email: string, role: string, token: string) {

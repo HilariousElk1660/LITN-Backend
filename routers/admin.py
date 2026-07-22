@@ -7,6 +7,7 @@ import uuid
 import os
 import tempfile
 import json
+from core.security import get_current_user
 
 from pydantic import BaseModel
 from core.database import get_connection
@@ -17,7 +18,7 @@ router = APIRouter()
 
 @router.get("/admins")
 async def get_admin(
-    current_user: dict = Depends(require_role("admin", "super_admin")),
+    current_user: dict = Depends(require_role("admin", "super-admin")),
 ):
     """
     Get a list of all admins and super admins. can only be accessed by admins
@@ -28,7 +29,7 @@ async def get_admin(
         
         async with get_connection() as conn:
             row = await conn.fetch(
-                "SELECT fullname,email,role FROM users WHERE role = 'admin' OR role = 'super_admin'"
+                "SELECT fullname,email,role FROM users WHERE role = 'admin' OR role = 'super-admin'"
             )
 
         return row 
@@ -42,27 +43,20 @@ class RoleChangeRequest(BaseModel):
 
 @router.patch("/change_role")
 async def change_user_role(
-    payload: Optional[RoleChangeRequest] = Body(None),
-    email: Optional[str] = None,
-    role: Optional[str] = None,
-    current_user: dict = Depends(require_role("admin", "super_admin")),
+    email: str = None,
+    role: str = None,
+    current_user: dict = Depends(require_role("admin", "super-admin")),
 ):
     """
     Change the role of a user. can only be accessed by admins
     email of the user whose role needs to be changed
     """
     try:
-        if payload is None:
-            if email is None or role is None:
-                raise HTTPException(status_code=400, detail="email and role are required")
-            payload = RoleChangeRequest(email=email, role=role)
-
-        email = payload.email.lower().strip()
-        role = payload.role.lower().replace('-', '_').replace(' ', '_')
+        print(email,role)
         if role == 'superadmin':
-            role = 'super_admin'
+            role = 'super-admin'
 
-        valid_roles = ["user", "admin", "super_admin"]
+        valid_roles = ["reader", "admin", "super-admin"]
         if role not in valid_roles:
             raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
 
@@ -93,22 +87,6 @@ async def change_user_role(
         raise HTTPException(status_code=500, detail="Error occurred while changing user role: " + str(e))
 
 
-@router.get("/user_by_email")
-async def get_user_by_email(email: str):
-    """
-    Debug helper: fetch a user by email.
-    """
-    try:
-        async with get_connection() as conn:
-            user = await conn.fetchrow("SELECT user_id, fullname, email, role FROM users WHERE email = $1", email)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        return user
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Error occurred while fetching user: " + str(e))
-
 
 class PromoteUserRequest(BaseModel):
     email: str
@@ -120,10 +98,10 @@ async def promote_user(
     payload: Optional[PromoteUserRequest] = Body(None),
     email: Optional[str] = None,
     role: Optional[str] = None,
-    current_user: dict = Depends(require_role("admin", "super_admin")),
+    current_user: dict = Depends(require_role("admin", "super-admin")),
 ):
     """
-    Promote a user to admin or super_admin. Alias for change_role with better naming.
+    Promote a user to admin or super-admin. Alias for change_role with better naming.
     """
     if payload is None:
         if email is None or role is None:
@@ -148,15 +126,60 @@ async def get_book_requests(admin_id:str):
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while fetching book requests: " + str(e))
     
+class Update_book_request(BaseModel):
+    request_id: str
+    status: str
+    book_id: str
+    reader_id: str
 
-@router.patch("/update_book_request")
-async def update_book_request(request_id: str, status: str):
+@router.put("/update_book_request")
+async def update_book_request(
+    update_book_request: Update_book_request,
+    current_user: dict = Depends(get_current_user)
+    ):
     """
     Update the status of a book request. can only be accessed by admins
     """
     try:
+        request_id = update_book_request.request_id
+        status = update_book_request.status
+        book_id = update_book_request.book_id
+        reader_id = update_book_request.reader_id
         #add logic to check user
         async with get_connection() as conn:
+            if (status == "paid" ):
+                book_details= await conn.fetch(
+                    "SELECT pages FROM books WHERE book_id = $1",
+                    book_id
+                )
+                
+                reader_book = {
+                    "book_id": book_id,
+                    "user_id": reader_id,
+                    "current_page": 0,
+                    "total_pages": book_details[0]["pages"],
+                    "current_chapter_index":0,
+                    "progress": "not started"
+                }
+                row2 = await conn.fetch(
+                    """INSERT INTO readers_books (
+                        book_id, 
+                        user_id, 
+                        current_page, 
+                        total_pages, 
+                        current_chapter_index, 
+                        progress
+                    ) 
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING reader_book_id;
+                    """,
+                    reader_book["book_id"],
+                    reader_book["user_id"],
+                    reader_book["current_page"],
+                    reader_book["total_pages"],
+                    reader_book["current_chapter_index"],
+                    "not_started"
+                )
             row = await conn.fetch(
                 "UPDATE book_requests SET status = $1 WHERE request_id = $2 RETURNING *",
                 status,
@@ -164,7 +187,6 @@ async def update_book_request(request_id: str, status: str):
             )
         print(row)
         if row:
-            
             return {"message": "Book request updated successfully"}
         else:
             raise HTTPException(status_code=404, detail="Book request not found")
@@ -225,21 +247,22 @@ async def send_book_request( book_request: Book_request):
     """
     try:
         #add logic to check user
-
+        print(book_request)
         async with get_connection() as conn:
-            row = await conn.execute(
-                "INSERT INTO book_requests (book_id, admin_id, reader_id, reader_name, reader_email, book_name, book_price,status,) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            row = await conn.fetch(
+                "INSERT INTO book_requests (book_id, admin_id, reader_id, reader_name, reader_email, book_name, book_price,status) VALUES ($1, $2, $3, $4, $5, $6, $7,$8) RETURNING *",
                 book_request.book_id,
                 book_request.admin_id,
                 book_request.reader_id,
                 book_request.reader_name,
                 book_request.reader_email,
                 book_request.book_name,
-                book_request.book_price
+                book_request.book_price,
+                "pending"
             )
 
         if row:
-            return {"message": "Book request sent successfully"}
+            return {"message": "Book request sent successfully","new_request":row}
         else:
             raise HTTPException(status_code=404, detail="Book not found")
     except Exception as e:
