@@ -77,6 +77,7 @@ class Update_book_request(BaseModel):
     status: str
     book_id: str
     reader_id: str
+    reader_email: str
 
 @router.put("/update_book_request")
 async def update_book_request(
@@ -91,6 +92,7 @@ async def update_book_request(
         status = update_book_request.status
         book_id = update_book_request.book_id
         reader_id = update_book_request.reader_id
+        reader_email = update_book_request.reader_email
         #add logic to check user
         async with get_connection() as conn:
             if (status == "paid" ):
@@ -131,8 +133,9 @@ async def update_book_request(
                 status,
                 request_id
             )
-        print(row)
+       
         if row:
+            # send_email(reader_email,"update_request")
             return {"message": "Book request updated successfully"}
         else:
             raise HTTPException(status_code=404, detail="Book request not found")
@@ -206,12 +209,47 @@ async def send_book_request( book_request: Book_request):
                 book_request.book_price,
                 "pending"
             )
+            row2 = await conn.fetch(
+                "SELECT email FROM users WHERE user_id = $1",
+                book_request.admin_id
+            )
 
         if row:
+            # send_email(row2[0]["email"],"send_request")
             return {"message": "Book request sent successfully","new_request":row}
         else:
             raise HTTPException(status_code=404, detail="Book not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while sending book request: " + str(e))
 
+
+
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+def send_email(email,template_name = ""):
+    import resend   
+    resend.api_key = os.getenv("RESEND_API_KEY")
+
+    subjects = {
+        "update_request": "Your book request payment has been reviewed",
+        "send_request": "New book request",
+        "confirm_request":"Your book request has been confirmed"
+    }
+    r = resend.Emails.send({
+    "from": "bookapp@shoenationrsa.com",
+    "to": email,
+    "subject": subjects[template_name],
+    "html":"<h1>Hello World</h1>"
+    # "template": {
+    # "id": template_name,
+    # "variables": {
+    #   "PRODUCT": "Vintage Macintosh",
+    #   "PRICE": 499
+    # }
+    # }
+    })
 
