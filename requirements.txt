@@ -22,5 +22,6 @@ PyMuPDF
 pdfplumber
 pytesseract
 pillow
+requests
 # fitz
 
