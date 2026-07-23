@@ -11,7 +11,7 @@ import json
 from uuid import UUID
 from dataclasses import dataclass, field
 from pydantic import BaseModel
-import fitz  # PyMuPDF
+# import fitz  # PyMuPDF
 import pdfplumber
 from PIL import Image
 import pytesseract
@@ -465,6 +465,7 @@ class PageContent:
     is_ocr: bool = False
 
 def _extract_with_pymupdf(pdf_path: str) -> List[str]:
+    import fitz
     texts = []
     doc = fitz.open(pdf_path)
     toc = doc.get_toc()
@@ -486,6 +487,7 @@ def _extract_with_pdfplumber(pdf_path: str, page_index: int) -> str:
  
 def _extract_with_ocr(pdf_path: str, page_index: int, dpi: int = 300) -> str:
     """Rasterize a single page and run tesseract OCR on it."""
+    import fitz
     doc = fitz.open(pdf_path)
     try:
         if page_index >= len(doc):
@@ -803,6 +805,7 @@ def extract_embedded_images(pdf_path: str) -> List[ExtractedImage]:
     downstream consumers can place images in their correct position rather
     than just knowing "this image came from this page."
     """
+    import fitz
     results: List[ExtractedImage] = []
     doc = fitz.open(pdf_path)
  

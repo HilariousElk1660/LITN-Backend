@@ -1,4 +1,4 @@
-PyJWT
+# PyJWT
 jwt
 pydantic[email]
 fastapi>=0.137.2
@@ -22,5 +22,5 @@ PyMuPDF
 pdfplumber
 pytesseract
 pillow
-fitz
+# fitz
 
