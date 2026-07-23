@@ -1,7 +1,7 @@
 // Replace your current Supabase `user_roles` insert logic with this helper.
 // This avoids sending `super-admin` to the DB directly and avoids Supabase RLS issues.
 
-const BACKEND_BASE_URL = import.meta.env.VITE_BACKEND_BASE_URL || "http://localhost:8000";
+const BACKEND_BASE_URL = import.meta.env.VITE_API_URL;
 
 function normalizeRole(role: string) {
   const normalized = role.toLowerCase().replace(/[-\s]/g, "_");

@@ -1,4 +1,4 @@
-const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || "http://localhost:8000";
+const BACKEND_BASE_URL = process.env.VITE_API_URL ;
 
 function normalizeRole(role: string) {
   const normalized = role.toLowerCase().replace(/[-\s]/g, "_");
