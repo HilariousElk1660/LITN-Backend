@@ -1,5 +1,4 @@
-# PyJWT
-jwt
+PyJWT
 pydantic[email]
 fastapi>=0.137.2
 uvicorn>=0.49.0
