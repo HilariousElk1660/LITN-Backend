@@ -56,8 +56,8 @@ async def create_book(
     price: Decimal = Form(...),
     book_division_type: str = Form(...),
     pdf_file: UploadFile = File(...),
-    translate_to: Optional[str] = Form("fr"),
-    translate_from: Optional[str]  = Form("en"),
+    translate_to: str = Form(...),
+    translate_from: str = Form(...),
 ):
     """ 
     From routers import auth, admin, upload_book
@@ -196,7 +196,7 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
                    
             #get book divisions using LLM: 
             book_divisions_structure = await divide_into_chapters(pages, book_details["book_division_type"])
-            print("successfully got book separation")
+            print("successfully got book separation!")
 
             book_divisions_structure = json.loads(book_divisions_structure)
         

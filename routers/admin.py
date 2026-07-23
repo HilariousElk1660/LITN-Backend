@@ -8,10 +8,12 @@ import os
 import tempfile
 import json
 from core.security import get_current_user
-
+import requests
 from pydantic import BaseModel
 from core.database import get_connection
 from core.security import require_role
+from dotenv import load_dotenv
+import os
 router = APIRouter()
 
 
@@ -132,11 +134,12 @@ class Update_book_request(BaseModel):
     book_id: str
     reader_id: str
     reader_email: str
+    reader_name:str
 
 @router.put("/update_book_request")
 async def update_book_request(
     update_book_request: Update_book_request,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("admin", "super-admin"))
     ):
     """
     Update the status of a book request. can only be accessed by admins
@@ -147,20 +150,22 @@ async def update_book_request(
         book_id = update_book_request.book_id
         reader_id = update_book_request.reader_id
         reader_email = update_book_request.reader_email
+        reader_name = update_book_request.reader_name
+
         #add logic to check user
         async with get_connection() as conn:
             if (status == "paid" ):
                 book_details= await conn.fetch(
-                    "SELECT pages FROM books WHERE book_id = $1",
+                    "SELECT * FROM books WHERE book_id = $1",
                     book_id
                 )
                 
                 reader_book = {
                     "book_id": book_id,
                     "user_id": reader_id,
-                    "current_page": 0,
+                    "current_page": 1,
                     "total_pages": book_details[0]["pages"],
-                    "current_chapter_index":0,
+                    "current_chapter_index":1,
                     "progress": "not started"
                 }
                 row2 = await conn.fetch(
@@ -189,7 +194,9 @@ async def update_book_request(
             )
        
         if row:
-            # send_email(reader_email,"update_request")
+            email_status = "accept_request" if status == "paid" else "decline_request"
+            #send reader email
+            send_email(reader_email,email_status,reader_email,book_details[0]["book_name"]) 
             return {"message": "Book request updated successfully"}
         else:
             raise HTTPException(status_code=404, detail="Book request not found")
@@ -249,8 +256,7 @@ async def send_book_request( book_request: Book_request):
     Send a book request to book admin
     """
     try:
-        #add logic to check user
-        print(book_request)
+       
         async with get_connection() as conn:
             row = await conn.fetch(
                 "INSERT INTO book_requests (book_id, admin_id, reader_id, reader_name, reader_email, book_name, book_price,status) VALUES ($1, $2, $3, $4, $5, $6, $7,$8) RETURNING *",
@@ -264,12 +270,13 @@ async def send_book_request( book_request: Book_request):
                 "pending"
             )
             row2 = await conn.fetch(
-                "SELECT email FROM users WHERE user_id = $1",
+                "SELECT email,fullname FROM users WHERE user_id = $1",
                 book_request.admin_id
             )
 
         if row:
-            # send_email(row2[0]["email"],"send_request")
+            send_email(row2[0]["email"], "send_request", user_name=row2[0]["fullname"], book_title=book_request.book_name)
+            # send_email(current_user["email"], "confirm_request", user_name=book_request.reader_name, book_title=book_request.book_name)
             return {"message": "Book request sent successfully","new_request":row}
         else:
             raise HTTPException(status_code=404, detail="Book not found")
@@ -279,31 +286,20 @@ async def send_book_request( book_request: Book_request):
 
 
 
-from dotenv import load_dotenv
-import os
 
-load_dotenv()
 
-def send_email(email,template_name = ""):
-    import resend   
-    resend.api_key = os.getenv("RESEND_API_KEY")
+from services.email_service import send_email as service_send_email
 
-    subjects = {
-        "update_request": "Your book request payment has been reviewed",
-        "send_request": "New book request",
-        "confirm_request":"Your book request has been confirmed"
-    }
-    r = resend.Emails.send({
-    "from": "bookapp@shoenationrsa.com",
-    "to": email,
-    "subject": subjects[template_name],
-    "html":"<h1>Hello World</h1>"
-    # "template": {
-    # "id": template_name,
-    # "variables": {
-    #   "PRODUCT": "Vintage Macintosh",
-    #   "PRICE": 499
-    # }
-    # }
-    })
+def send_email(
+    email: str = "becalisjohnson@gmail.com",
+    reason: str = "update_request",
+    user_name: str = "James",
+    book_title: str = "Sample Book"
+):
+    success = service_send_email(email, reason=reason, user_name=user_name, book_title=book_title)
+    
+    if success:
+        return {"status": "success", "message": "Email sent successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to send email")
 
