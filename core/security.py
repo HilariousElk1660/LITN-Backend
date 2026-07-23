@@ -30,7 +30,7 @@ async def get_current_user(
         return {
             "user_id": payload["sub"],
             "email": payload["email"],
-            "role": payload["role"],
+            "role": payload["role"]
         }
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired.")
