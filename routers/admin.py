@@ -8,7 +8,7 @@ import os
 import tempfile
 import json
 from core.security import get_current_user
-import requests
+# import requests
 from pydantic import BaseModel
 from core.database import get_connection
 from core.security import require_role
