@@ -115,7 +115,7 @@ async def get_reading_progress(reader_id: str, book_id: str):
 
 @router.post("/save_reading_progress")
 async def save_reading_progress(reader_id:str, book_id:str, page_stopped_at:int):
-    
+    print("TYPE:", type(page_stopped_at))
     async with get_connection() as conn:
         result = await conn.fetch(
             """
@@ -128,7 +128,6 @@ async def save_reading_progress(reader_id:str, book_id:str, page_stopped_at:int)
             book_id, 
             reader_id,
         )
-    print(result)
     return result
 
 @router.get("/readers_requests")
