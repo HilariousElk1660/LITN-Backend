@@ -14,7 +14,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://litn.vercel.app","https://litnfrontend.vercel.app"],
+    allow_origins=["https://litn.vercel.app","https://litnfrontend.vercel.app","https://bookappfrontend-five.vercel.app/"],
     allow_origin_regex=r"http://(?:localhost|127\.0\.0\.1)(?::[0-9]+)?",
     allow_credentials=True,
     allow_methods=["*"],
