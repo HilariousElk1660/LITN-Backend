@@ -16,6 +16,7 @@ async def all_books():
                    category, pages, chapters,
                    subscription_price, status, published_date, created_at
             FROM books
+            WHERE status = 'completed'
             ORDER BY created_at DESC
             """
         )
@@ -115,7 +116,7 @@ async def get_reading_progress(reader_id: str, book_id: str):
 
 @router.post("/save_reading_progress")
 async def save_reading_progress(reader_id:str, book_id:str, page_stopped_at:int):
-    
+    print("TYPE:", type(page_stopped_at))
     async with get_connection() as conn:
         result = await conn.fetch(
             """
@@ -128,7 +129,6 @@ async def save_reading_progress(reader_id:str, book_id:str, page_stopped_at:int)
             book_id, 
             reader_id,
         )
-    print(result)
     return result
 
 @router.get("/readers_requests")
@@ -139,24 +139,3 @@ async def readbook(current_user: dict = Depends(get_current_user)):
         )
     return result
 
-@router.get("/book/{book_id}")
-async def get_book_details(book_id: str):
-    """
-    Retrieve details of a specific book by its ID.
-    """
-    try:
-        #add logic to check user
-        async with get_connection() as conn:
-            book_details = await conn.fetch(
-                "SELECT * FROM books WHERE book_id = $1",
-                book_id
-            )
-            book_file_details = await conn.fetch(
-                "SELECT * FROM book_files WHERE book_id = $1",
-                book_id
-            )
-        # print(**book_details[0], **book_file_details[0])
-        return {**book_details[0], **book_file_details[0]}
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Error occurred while fetching book details: " + str(e))

@@ -135,6 +135,7 @@ class Update_book_request(BaseModel):
     reader_id: str
     reader_email: str
     reader_name:str
+    decline_reason: Optional[str] = None
 
 @router.put("/update_book_request")
 async def update_book_request(
@@ -149,16 +150,17 @@ async def update_book_request(
         status = update_book_request.status
         book_id = update_book_request.book_id
         reader_id = update_book_request.reader_id
-        reader_email = update_book_request.reader_email
+        reader_email = update_book_request.reader_email 
         reader_name = update_book_request.reader_name
+        decline_reason= update_book_request.decline_reason
 
         #add logic to check user
         async with get_connection() as conn:
+            book_details= await conn.fetch(
+                "SELECT * FROM books WHERE book_id = $1",
+                book_id
+            )
             if (status == "paid" ):
-                book_details= await conn.fetch(
-                    "SELECT * FROM books WHERE book_id = $1",
-                    book_id
-                )
                 
                 reader_book = {
                     "book_id": book_id,
@@ -166,7 +168,7 @@ async def update_book_request(
                     "current_page": 1,
                     "total_pages": book_details[0]["pages"],
                     "current_chapter_index":1,
-                    "progress": "not started"
+                  
                 }
                 row2 = await conn.fetch(
                     """INSERT INTO readers_books (
@@ -174,23 +176,22 @@ async def update_book_request(
                         user_id, 
                         current_page, 
                         total_pages, 
-                        current_chapter_index, 
-                        progress
+                        current_chapter_index
                     ) 
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                    VALUES ($1, $2, $3, $4, $5)
                     RETURNING reader_book_id;
                     """,
                     reader_book["book_id"],
                     reader_book["user_id"],
                     reader_book["current_page"],
                     reader_book["total_pages"],
-                    reader_book["current_chapter_index"],
-                    "not_started"
+                    reader_book["current_chapter_index"]
                 )
             row = await conn.fetch(
-                "UPDATE book_requests SET status = $1 WHERE request_id = $2 RETURNING *",
+                "UPDATE book_requests SET status = $1, decline_reason = $3 WHERE request_id = $2 RETURNING *",
                 status,
-                request_id
+                request_id,
+                decline_reason
             )
        
         if row:
@@ -283,8 +284,48 @@ async def send_book_request( book_request: Book_request):
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while sending book request: " + str(e))
 
+@router.get('/admin_book_report')
+async def get_book_report(
+    book_id: str,
+    current_user: dict = Depends(require_role("admin", "super-admin"))
 
+):
+    try:
+        #add logic to check user
+        async with get_connection() as conn:
+            book_requests_query = await conn.fetch(
+                """
+                SELECT 
+                    COUNT(*) AS total_requests,
+                    COUNT(*) FILTER (WHERE status = 'paid') AS accepted_requests,
+                    COUNT(*) FILTER (WHERE status = 'declined') AS declined_requests
+                FROM book_requests
+                WHERE book_id = $1
+                """,
+                book_id
+            ) 
 
+            readers_books_query = await conn.fetch(
+            """
+            SELECT 
+                COUNT(*) FILTER (WHERE progress = 'done') AS readers_done,
+                COUNT(*) FILTER (WHERE progress = 'in_progress') AS readers_reading
+            FROM readers_books
+            WHERE book_id = $1
+
+            """,
+            book_id
+            )
+        print(book_requests_query, readers_books_query)
+        return {
+        "totalRequests": book_requests_query[0]["total_requests"] if book_requests_query else 0,
+        "acceptedRequests": book_requests_query[0]["accepted_requests"] if book_requests_query else 0,
+        "declinedRequests": book_requests_query[0]["declined_requests"] if book_requests_query else 0,
+        "readersDone": readers_books_query[0]["readers_done"] if readers_books_query else 0,
+        "readersReading": readers_books_query[0]["readers_reading"] if readers_books_query else 0,
+    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error occurred while fetching admin books: " + str(e))
 
 
 
