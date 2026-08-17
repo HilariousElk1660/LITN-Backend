@@ -38,6 +38,8 @@ async def get_admin(
     except (Exception) as e:
         raise HTTPException(status_code=500, detail="Error occurred while fetching admins")
 
+
+# @router.get("")
 class RoleChangeRequest(BaseModel):
     email: str
     role: str
@@ -233,7 +235,7 @@ async def get_admin_books(admin_id:str):
         #add logic to check user
         async with get_connection() as conn:
             row = await conn.fetch(
-                "SELECT * FROM books WHERE admin_id = $1",
+                "SELECT * FROM books WHERE admin_id = $1 AND status = 'completed'",
                 admin_id
             ) 
         return row

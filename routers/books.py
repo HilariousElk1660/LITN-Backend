@@ -14,7 +14,7 @@ async def all_books():
             """
             SELECT book_id, book_name, author_name, book_cover_url,
                    category, pages, chapters,
-                   subscription_price, status, published_date, created_at
+                   subscription_price, status, published_date, created_at,uploaded_by
             FROM books
             WHERE status = 'completed'
             ORDER BY created_at DESC
