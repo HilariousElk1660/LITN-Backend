@@ -293,37 +293,44 @@ async def get_book_report(
     try:
         #add logic to check user
         async with get_connection() as conn:
-            book_requests_query = await conn.fetch(
+            requests = await conn.fetch(
                 """
-                SELECT 
-                    COUNT(*) AS total_requests,
-                    COUNT(*) FILTER (WHERE status = 'paid') AS accepted_requests,
-                    COUNT(*) FILTER (WHERE status = 'declined') AS declined_requests
+                SELECT reader_name, reader_email, status
                 FROM book_requests
                 WHERE book_id = $1
                 """,
                 book_id
-            ) 
-
-            readers_books_query = await conn.fetch(
-            """
-            SELECT 
-                COUNT(*) FILTER (WHERE progress = 'done') AS readers_done,
-                COUNT(*) FILTER (WHERE progress = 'in_progress') AS readers_reading
-            FROM readers_books
-            WHERE book_id = $1
-
-            """,
-            book_id
             )
-        print(book_requests_query, readers_books_query)
+            
+            readers = await conn.fetch(
+                """
+                SELECT u.fullname AS reader_name, u.email AS reader_email, rb.progress
+                FROM readers_books rb
+                JOIN users u ON rb.user_id = u.user_id
+                WHERE rb.book_id = $1
+                """,
+                book_id
+            )
+        
+        pending_list = [{"name": r["reader_name"], "email": r["reader_email"]} for r in requests if r["status"] == "pending"]
+        accepted_list = [{"name": r["reader_name"], "email": r["reader_email"]} for r in requests if r["status"] == "paid"]
+        declined_list = [{"name": r["reader_name"], "email": r["reader_email"]} for r in requests if r["status"] == "declined"]
+        
+        completed_list = [{"name": r["reader_name"], "email": r["reader_email"]} for r in readers if r["progress"] == "done"]
+        in_progress_list = [{"name": r["reader_name"], "email": r["reader_email"]} for r in readers if r["progress"] == "in_progress"]
+        
         return {
-        "totalRequests": book_requests_query[0]["total_requests"] if book_requests_query else 0,
-        "acceptedRequests": book_requests_query[0]["accepted_requests"] if book_requests_query else 0,
-        "declinedRequests": book_requests_query[0]["declined_requests"] if book_requests_query else 0,
-        "readersDone": readers_books_query[0]["readers_done"] if readers_books_query else 0,
-        "readersReading": readers_books_query[0]["readers_reading"] if readers_books_query else 0,
-    }
+            "totalRequests": len(requests),
+            "acceptedRequests": len(accepted_list),
+            "declinedRequests": len(declined_list),
+            "readersDone": len(completed_list),
+            "readersReading": len(in_progress_list),
+            "pendingList": pending_list,
+            "acceptedList": accepted_list,
+            "declinedList": declined_list,
+            "completedList": completed_list,
+            "inProgressList": in_progress_list
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while fetching admin books: " + str(e))
 
