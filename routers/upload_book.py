@@ -54,6 +54,7 @@ async def create_book(
     category: str = Form(...),
     published_date: str = Form(...),
     price: Decimal = Form(...),
+    currency: str = Form(...),
     book_division_type: str = Form(...),
     pdf_file: UploadFile = File(...),
     translate_to: str = Form(...),
@@ -85,6 +86,7 @@ async def create_book(
             category,
             published_date,
             price,
+            currency,
             book_division_type
         )
 
@@ -547,12 +549,15 @@ async def create_book(
     category: Optional[str],
     published_date,
     subscription_price,
+    currency: str,
     book_division_type: str,
 ) -> UUID:
     try:
         async with get_connection() as conn:
+            # Store the base price and its currency so checkout can auto-detect the book's
+            # original denomination and convert it into the buyer's chosen payment currency.
             new_book = await conn.fetch(
-                "INSERT INTO books (admin_id, uploaded_by, author_name, book_name, category, published_date, subscription_price, book_division_type, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING book_id",
+                "INSERT INTO books (admin_id, uploaded_by, author_name, book_name, category, published_date, subscription_price, currency, book_division_type, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING book_id",
                 admin_id,
                 uploaded_by,
                 author_name,
@@ -560,14 +565,15 @@ async def create_book(
                 category,
                 published_date,
                 subscription_price,
+                currency,
                 book_division_type,
                 "pending"
-            )  
+            )
             new_book_file = await conn.fetch(
                 "INSERT INTO book_files (book_id) VALUES ($1) RETURNING book_file_id",
                 new_book[0]["book_id"],
             )
-            return new_book[0]["book_id"] , new_book_file[0]["book_file_id"]    
+            return new_book[0]["book_id"] , new_book_file[0]["book_file_id"]
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while creating book row: " + str(e))
 

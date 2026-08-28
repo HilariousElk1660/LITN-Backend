@@ -22,5 +22,6 @@ pdfplumber
 pytesseract
 pillow
 requests
+httpx>=0.24.0
 # fitz
 
