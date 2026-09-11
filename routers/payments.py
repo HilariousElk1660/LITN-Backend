@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Request, HTTPException
-from core.payfast import PAYFAST_URL, VALID_PAYFAST_IPS
+from core.payfast import PAYFAST_URL
 from services.payfast_service import build_payment_data, generate_signature
 from schemas.payment import CreatePaymentRequest, CreatePaymentResponse
-from core.database import get_connection
+from routers.admin import apply_book_request_update, Update_book_request
+import urllib.parse
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -14,8 +15,12 @@ async def create_payment(payload: CreatePaymentRequest):
         amount=payload.amount,
         item_name=payload.item_name,
         buyer_email=payload.buyer_email,
+        request_id=payload.request_id,
+        book_id=payload.book_id,
+        reader_id=payload.reader_id,
+        reader_email=payload.reader_email,
+        reader_name=payload.reader_name,
     )
-    import urllib.parse
     query_string = urllib.parse.urlencode(data)
     return {"redirect_url": f"{PAYFAST_URL}?{query_string}"}
 
@@ -31,15 +36,16 @@ async def payfast_notify(request: Request):
     if received_signature != expected_signature:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    client_ip = request.client.host
-    if client_ip not in VALID_PAYFAST_IPS:
-        raise HTTPException(status_code=400, detail="Invalid source IP")
-
     if data.get("payment_status") == "COMPLETE":
-        order_id = data.get("m_payment_id")
-        async with get_connection() as conn:
-            await conn.execute(
-                "UPDATE orders SET status = 'paid' WHERE id = $1", order_id
-            )
+        payload = Update_book_request(
+            request_id=data.get("custom_str1"),
+            status="paid",
+            book_id=data.get("custom_str2"),
+            reader_id=data.get("custom_str3"),
+            reader_email=data.get("custom_str4"),
+            reader_name=data.get("custom_str5"),
+            payment_type="payfast",
+        )
+        await apply_book_request_update(payload)
 
     return {"status": "ok"}
