@@ -10,6 +10,7 @@ class CreatePaymentRequest(BaseModel):
     reader_id: str | None = None
     reader_email: str | None = None
     reader_name: str | None = None
+    lang: str | None = None
 
 class CreatePaymentResponse(BaseModel):
     redirect_url: str

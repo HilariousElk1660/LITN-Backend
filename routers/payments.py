@@ -20,6 +20,7 @@ async def create_payment(payload: CreatePaymentRequest):
         reader_id=payload.reader_id,
         reader_email=payload.reader_email,
         reader_name=payload.reader_name,
+        lang=payload.lang
     )
     query_string = urllib.parse.urlencode(data)
     return {"redirect_url": f"{PAYFAST_URL}?{query_string}"}

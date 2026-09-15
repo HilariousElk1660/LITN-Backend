@@ -27,6 +27,7 @@ def build_payment_data(
     reader_id: str | None = None,
     reader_email: str | None = None,
     reader_name: str | None = None,
+    lang: str | None = "en"
 ) -> dict:
     return_params = {}
     if request_id:
@@ -40,7 +41,7 @@ def build_payment_data(
     if reader_name:
         return_params["reader_name"] = reader_name
 
-    return_url = f"{FRONTEND_URL}/payment/success"
+    return_url = f"{FRONTEND_URL}/{lang}/payment/success"
     if return_params:
         return_url += f"?{urllib.parse.urlencode(return_params)}"
 
@@ -48,7 +49,7 @@ def build_payment_data(
         "merchant_id": PAYFAST_MERCHANT_ID,
         "merchant_key": PAYFAST_MERCHANT_KEY,
         "return_url": return_url,
-        "cancel_url": f"{FRONTEND_URL}/payment/cancelled",
+        "cancel_url": f"{FRONTEND_URL}/{lang}/payment/cancelled",
         "notify_url": f"{BACKEND_URL}/payments/notify",
         "m_payment_id": order_id,
         "amount": f"{amount:.2f}",
