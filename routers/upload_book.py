@@ -11,7 +11,7 @@ import json
 from uuid import UUID
 from dataclasses import dataclass, field
 from pydantic import BaseModel
-import fitz  # PyMuPDF
+# import fitz  # PyMuPDF
 import pdfplumber
 from PIL import Image
 import pytesseract
@@ -22,8 +22,11 @@ import requests
 import json
 import os
 from openrouter import OpenRouter
+import mimetypes
+import time
 
 from core.database import get_connection
+from pathlib import Path
 router = APIRouter()
 
 import cloudinary
@@ -52,9 +55,9 @@ async def create_book(
     published_date: str = Form(...),
     price: Decimal = Form(...),
     book_division_type: str = Form(...),
-    book_cover: UploadFile = File(...),
     pdf_file: UploadFile = File(...),
-
+    translate_to: str = Form(...),
+    translate_from: str = Form(...),
 ):
     """ 
     From routers import auth, admin, upload_book
@@ -66,18 +69,13 @@ async def create_book(
         if pdf_file.content_type not in ALLOWED_BOOK_CONTENT_TYPES:
             raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
-        if book_cover.content_type not in ALLOWED_BOOK_COVER_CONTENT_TYPES:
-            raise HTTPException(status_code=400, detail="Only JPEG and PNG cover images are supported")
-        
-        #max size:
-        
-        
-        # book_cover_url = await upload_book_cover(book_cover)
 
         book_pdf_file = pdf_file
+       
+        pdf_url = uuid.uuid4()
+        book_pdf_url = await upload_book_pdf(pdf_file, pdf_url)
+        await pdf_file.seek(0)
         pdf_bytes = await book_pdf_file.read()
-        # print('bytes:', pdf_bytes) 
-        # return book_cover_url
        
         [new_book_id, new_book_file_id] = await create_book(
             admin_id,
@@ -87,23 +85,21 @@ async def create_book(
             category,
             published_date,
             price,
-            book_division_type,
-            # book_cover_url
-            "url"
+            book_division_type
         )
 
-        #save pdf
-        # book_pdf_url = await upload_book_pdf(pdf_file)
         book_details = {
             "book_id": new_book_id,
             "book_file_id": new_book_file_id,
             "book_division_type": book_division_type,
             "book_title": book_name,
-            "author_name": author_name
-
+            "author_name": author_name,
+            "translate_to": translate_to,
+            "translate_from": translate_from,
+            "book_pdf_url": book_pdf_url
         }
+        
         background_tasks.add_task(process_book_pdf,book_details, pdf_bytes)
-        logger.info("Book creation initiated.")
         return {
             "book_id":new_book_id,
             "book_file_id":new_book_file_id,
@@ -131,12 +127,15 @@ async def upload_book_cover(book_cover: UploadFile) -> str:
         raise HTTPException(status_code=500, detail="Error occurred while uploading book cover: " + str(e))
 
 
-async def upload_book_pdf(pdf_file: UploadFile) -> str:
+async def upload_book_pdf(pdf_file: UploadFile, book_id: str) -> str:
     """
     Upload a book PDF to Cloudinary/S3 and returns book url
     """
     try:
-        book_pdf_details = cloudinary.uploader.upload(pdf_file.file)
+        book_pdf_details = cloudinary.uploader.upload(
+            pdf_file.file,
+            folder=f"books/{book_id}",
+            )
         return book_pdf_details.get("secure_url")
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while uploading book pdf: " + str(e))
@@ -178,6 +177,7 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
     Uses its own DB session since BackgroundTasks run outside the original
     request's dependency-injected session lifecycle.
     """
+    status = "pending"
     try:
         #extracting pdf
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -187,27 +187,62 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
             try:
                 pages = extract_pdf_text(tmp_path)
                 embedded_images = extract_embedded_images(tmp_path);
-                # print(embedded_images)
             finally:
-                os.unlink(tmp_path) 
-
-            #save pages in json file:
-       
-
-            
+                try:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                except Exception:
+                    pass 
+                   
             #get book divisions using LLM: 
             book_divisions_structure = await divide_into_chapters(pages, book_details["book_division_type"])
-            print("successfully got book separation")
+            print("successfully got book separation!")
+
+            book_divisions_structure = json.loads(book_divisions_structure)
+        
+            #translate pdf
+            translation_url = translate_pdf(book_details["book_pdf_url"],book_details["translate_to"])
+            print("successfully translated pdf")
+            translation_details = {
+                book_details["translate_from"]: book_details["book_pdf_url"],
+                book_details["translate_to"]: translation_url
+            }
+            
+            book_cover_url = None
+            #save book cover
+            for image in embedded_images:
+                image_key = (
+                    f"books/{book_details['book_id']}/images/page_{image.page_number}_{image.image_index}.{image.ext}"
+                )
+                try:
+                    book_cover_url = await upload_embedded_image(book_details['book_id'], image)
+                    print(f"Embedded image URL for page {image.page_number}: {book_cover_url}")
+                    break
+                        
+                except Exception as e:
+                    # Log and continue -- one failed image upload shouldn't
+                    # fail the entire book processing run.
+                    logger.exception(
+                        "Failed to upload embedded image page=%s index=%s book_id=%s",
+                        image.page_number, image.image_index, book_details['book_id'],
+                    )
+                    continue
+            
+            # print(book_cover_url)
+            updated = await update_book_file(book_details["book_file_id"],book_divisions_structure["book_structure"], translation_details, book_cover_url,len(pages));
+            print("successfully updated book file")
+            status = "completed"
+
             # 1. Parse the string into a real Python dictionary
-            parsed_structure = json.loads(book_divisions_structure)
+            # parsed_structure = json.loads(book_divisions_structure)
 
-            # 2. Access the key safely
-            book_divisions = parsed_structure["book_structure"]
+            # # 2. Access the key safely
+            # book_divisions = parsed_structure["book_structure"]
 
-            epub_bytes = build_epub(book_details['book_id'], book_details['book_title'], book_details['author_name'], pages, book_divisions)
-            print('converted pdf to epub')
-            await upload_epub(book_details['book_id'], epub_bytes)
-            print('epub uploaded successfully')
+            # epub_bytes = build_epub(book_details['book_id'], book_details['book_title'], book_details['author_name'], pages, book_divisions, embedded_images)
+            # print('converted pdf to epub')
+            # await upload_epub(book_details['book_id'], epub_bytes)
+            # print('epub uploaded successfully')
         
         return
         def chapter_for_page(page_number: int):
@@ -267,135 +302,162 @@ async def process_book_pdf(book_details: dict, pdf_bytes: bytes):
             })
         #saving book divisions and pdf image indexes
         print(pdf_images)
-        updated = await update_book_file(book_details["book_file_id"],book_divisions,pdf_images);
-        print(updated)
-        # if not updated:
-            # logger.error(f"Failed to update book divisions for book_file_id: {book_details['book_file_id']}")
-
+        
            
     except Exception as e:
+        status="failed"
         logger.exception(f"Error occurred while converting book pdf: {str(e)}")
-
+    finally:
+        await update_book_status(status, book_details['book_id'])
+        # pass
 from ebooklib import epub
+import html
+
+_EXT_TO_MIME_SUBTYPE = {
+    "jpg": "jpeg",
+    "jpeg": "jpeg",
+    "png": "png",
+    "gif": "gif",
+    "bmp": "bmp",
+    "tiff": "tiff",
+    "tif": "tiff",
+    "webp": "webp",
+}
+ 
+ 
+def _image_mime_type(ext: str) -> str:
+    subtype = _EXT_TO_MIME_SUBTYPE.get(ext.lower(), "png")
+    return f"image/{subtype}"
 
 
-def build_epub(book_id, book_title: str, author_name: str, pages:dict, book_divisions: list) -> bytes:
+
+def build_epub(
+    book_id, book_title: str,
+    author_name: str,
+    pages: dict,
+    book_divisions: list,
+    embedded_images: Optional[List["ExtractedImage"]] = None,
+    ) -> bytes:
+        """
+    Assembles an EPUB file from the extracted book structure and returns
+    the raw .epub file bytes. Mirrors extract_embedded_images() in that
+    it's a pure, synchronous transformation with no network calls --
+    upload happens separately in upload_epub(), same separation of
+    concerns as extract_embedded_images() / upload_embedded_image().
+
+    `embedded_images` (from image_extraction_service.extract_embedded_images)
+    are embedded directly into the EPUB as EpubImage items and referenced
+    via inline <img> tags placed right after the page they were found on --
+    this is what actually gets them INTO the .epub file, as opposed to just
+    uploading them to Cloudinary as separate, unrelated assets.
     """
-    Assembles an EPUB file from the already-extracted book structure
-    (chapters + per-page text) and returns the raw .epub file bytes,
-    ready to be uploaded to Cloudinary/S3/wherever.
+        embedded_images = embedded_images or []
 
-    NOTE: `book_id` was referenced in the original snippet but not part of
-    the function signature -- added here as a parameter since
-    set_identifier() needs *some* stable unique string, and pulling it from
-    an outer scope/global would be fragile. Pass the book's actual UUID in.
-    """
+        images_by_page: dict = {}
+        for img in embedded_images:
+            images_by_page.setdefault(img.page_number, []).append(img)
+        for page_images in images_by_page.values():
+            page_images.sort(key=lambda i: i.image_index)
 
-    # --- Create the EPUB "container" object ---
-    # EpubBook is ebooklib's in-memory representation of the whole file --
-    # metadata, chapters, images, table of contents, and reading order all
-    # get attached to this one object before it's written out at the end.
-    book = epub.EpubBook()
+        book = epub.EpubBook()
+        book.set_identifier(str(book_id))
+        book.set_title(book_title)
+        book.set_language("en")
+        book.add_author(author_name)
 
-    # Every EPUB needs a unique identifier (this is what e-readers/libraries
-    # use to distinguish one book from another, similar to an ISBN). Using
-    # the book's own UUID guarantees uniqueness without needing to generate
-    # a separate ID just for the EPUB.
-    book.set_identifier(str(book_id))
+        epub_chapters = []
+        seen_image_filenames: set = set()
+        # Same reasoning as seen_image_filenames below: chapter file_name is
+        # built from (type, chapter_number), which isn't guaranteed globally
+        # unique -- e.g. two different parts/sections of the book can each
+        # restart their own "Section 1, Section 2..." numbering, producing
+        # two divisions that both compute to "Section_1.xhtml". Without this
+        # guard, ebooklib writes two zip entries with the identical name,
+        # producing a corrupt .epub (the "Duplicate name" warning, and
+        # readers failing with "File exists" on extraction).
+        seen_chapter_filenames: set = set()
 
-    # Human-readable metadata shown in e-reader libraries (Kindle, Apple
-    # Books, etc.) -- title, language (ISO 639-1 code, "en" = English), and
-    # author. None of this affects rendering, only how the book is listed.
-    book.set_title(book_title)
-    book.set_language("en")
-    book.add_author(author_name)
+        for chapter in book_divisions:
+            pages_in_chapter = [
+                p for p in pages
+                if chapter.get('start_page') <= p.page_number <= chapter.get('end_page')
+            ]
 
-    # Will collect one EpubHtml object per chapter as we build them, so we
-    # can reference the same list twice below (once for the table of
-    # contents, once for the reading order/spine).
-    epub_chapters = []
+            html_parts = []
+            for page in pages_in_chapter:
+                html_parts.append(f"<p>{html.escape(page.text)}</p>")
 
-    # --- Build one XHTML "page" per chapter ---
-    for chapter in book_divisions:
-        # Pull out just the pages that fall within this chapter's page
-        # range (start_page/end_page were already determined by the
-        # chapter-detection step, whether regex or LLM-based).
-        pages_in_chapter = [
-            p for p in pages
-            if chapter.get('start_page') <= p.page_number <= chapter.get('end_page')
-        ]
-        
+                for img in images_by_page.get(page.page_number, []):
+                    base_name = f"images/page_{img.page_number}_{img.image_index}"
+                    image_filename = f"{base_name}.{img.ext}"
 
-        # Concatenate every page's text into one HTML body for the chapter,
-        # each page wrapped in its own <p> tag. NOTE: this does not escape
-        # HTML special characters (<, >, &) -- if extracted PDF text ever
-        # contains those literally, this will produce broken/invalid XHTML
-        # or, if ever rendered elsewhere, an XSS risk. Should be
-        # `html.escape(p.text)` before interpolating (see caveat below).
-        html_body = "".join(f"<p>{p.text}</p>" for p in pages_in_chapter)
+                    if image_filename in seen_image_filenames:
+                        logger.warning(
+                            "Duplicate image filename %s (page=%s index=%s) -- "
+                            "disambiguating to avoid a corrupt EPUB",
+                            image_filename, img.page_number, img.image_index,
+                        )
+                        suffix = 1
+                        while f"{base_name}_dup{suffix}.{img.ext}" in seen_image_filenames:
+                            suffix += 1
+                        image_filename = f"{base_name}_dup{suffix}.{img.ext}"
 
-        # EpubHtml represents ONE content file inside the EPUB (i.e. one
-        # chapter = one XHTML file in the final zip). `file_name` is the
-        # internal path this chapter will be saved at inside the EPUB
-        # archive -- it must be unique across all chapters, hence keying it
-        # off chapter_number.
-        c = epub.EpubHtml(
-            title=chapter.get('title') or f"{chapter.get('type') or 'Chapter'} {chapter.get('chapter_number')}",
-            file_name=f"chap_{chapter.get('chapter_number')}.xhtml",
-            content=f"<h1>{chapter.get('title') or ''}</h1>{html_body}",
-        )
+                    seen_image_filenames.add(image_filename)
+                    mime_type = _image_mime_type(img.ext)
 
-        # Registers this chapter's XHTML file into the book's internal
-        # manifest (the master list of every file bundled inside the EPUB).
-        # Without this, the chapter's content would exist as a Python
-        # object but never actually get written into the final archive.
-        book.add_item(c)
-        epub_chapters.append(c)
+                    epub_image = epub.EpubImage()
+                    epub_image.file_name = image_filename
+                    epub_image.media_type = mime_type
+                    epub_image.content = img.image_bytes
+                    book.add_item(epub_image)
 
-    # --- Table of contents ---
-    # `book.toc` defines the EPUB's navigable table of contents -- what
-    # shows up when a reader taps "Contents" in their e-reader app. Passing
-    # the flat list of chapters here means each chapter appears as one
-    # top-level TOC entry (no nested sub-sections).
-    book.toc = epub_chapters
+                    html_parts.append(f'<img src="{image_filename}" alt="Illustration"/>')
 
-    # --- Reading order (the "spine") ---
-    # The spine defines the order pages are presented when someone reads
-    # straight through the book (as opposed to the TOC, which is for
-    # jumping around). "nav" refers to the auto-generated navigation
-    # document added below -- placing it first means the reader sees/uses
-    # it before diving into chapter 1.
-    book.spine = ["nav"] + epub_chapters
+            html_body = "".join(html_parts)
 
-    # EpubNcx: generates the legacy EPUB2-style table-of-contents file.
-    # Still included for backward compatibility with older e-readers that
-    # don't understand the newer EPUB3 nav format.
-    book.add_item(epub.EpubNcx())
+            chapter_title = chapter.get('title') or f"{chapter.get('type')} {chapter.get('chapter_number')}"
 
-    # EpubNav: generates the modern EPUB3 navigation document (an XHTML
-    # file with the actual clickable TOC links). Most current e-readers
-    # rely on this rather than the NCX file.
-    book.add_item(epub.EpubNav())
+            # Build the base file_name from (type, chapter_number), same as
+            # before, but now check it against every filename already used.
+            base_chapter_name = f"{chapter.get('type')}_{chapter.get('chapter_number')}"
+            chapter_filename = f"{base_chapter_name}.xhtml"
 
-    # --- Write the finished EPUB to disk ---
-    # write_epub() is where all the actual file-format work happens: it
-    # zips every registered item (chapters, nav, ncx) into a single .epub
-    # archive with the correct manifest, spine, and the mandatory
-    # uncompressed "mimetype" entry the EPUB spec requires. Everything
-    # built above is just describing what SHOULD go in the file; this line
-    # is what actually produces it.
-    tmp_path = "/tmp/output.epub"
-    epub.write_epub(tmp_path, book)
+            if chapter_filename in seen_chapter_filenames:
+                logger.warning(
+                    "Duplicate chapter filename %s (type=%s chapter_number=%s) -- "
+                    "disambiguating to avoid a corrupt EPUB",
+                    chapter_filename, chapter.get('type'), chapter.get('chapter_number'),
+                )
+                suffix = 1
+                while f"{base_chapter_name}_dup{suffix}.xhtml" in seen_chapter_filenames:
+                    suffix += 1
+                chapter_filename = f"{base_chapter_name}_dup{suffix}.xhtml"
 
-    # Read the just-written file back into memory as bytes, so the caller
-    # gets a portable value they can upload (to Cloudinary/S3/etc.) without
-    # needing to know or care about the temp file path. The temp file
-    # itself is left on disk here -- worth adding an os.remove(tmp_path)
-    # (or using tempfile.NamedTemporaryFile) after this read to avoid
-    # leaking files into /tmp on repeated calls.
-    with open(tmp_path, "rb") as f:
-        return f.read()
+            seen_chapter_filenames.add(chapter_filename)
 
+            c = epub.EpubHtml(
+                title=chapter_title,
+                file_name=chapter_filename,
+                content=f"<h1>{html.escape(chapter_title)}</h1>{html_body}",
+            )
+
+            book.add_item(c)
+            epub_chapters.append(c)
+
+        book.toc = epub_chapters
+        book.spine = ["nav"] + epub_chapters
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".epub")
+        os.close(tmp_fd)
+
+        try:
+            epub.write_epub(tmp_path, book)
+            with open(tmp_path, "rb") as f:
+                return f.read()
+        finally:
+            os.unlink(tmp_path)
 @dataclass
 class PageContent:
     page_number: int  # 1-indexed
@@ -403,6 +465,7 @@ class PageContent:
     is_ocr: bool = False
 
 def _extract_with_pymupdf(pdf_path: str) -> List[str]:
+    import fitz
     texts = []
     doc = fitz.open(pdf_path)
     toc = doc.get_toc()
@@ -424,6 +487,7 @@ def _extract_with_pdfplumber(pdf_path: str, page_index: int) -> str:
  
 def _extract_with_ocr(pdf_path: str, page_index: int, dpi: int = 300) -> str:
     """Rasterize a single page and run tesseract OCR on it."""
+    import fitz
     doc = fitz.open(pdf_path)
     try:
         if page_index >= len(doc):
@@ -484,18 +548,15 @@ async def create_book(
     published_date,
     subscription_price,
     book_division_type: str,
-    # book_url: str,
-    book_cover_url: Optional[str] = None
 ) -> UUID:
     try:
         async with get_connection() as conn:
             new_book = await conn.fetch(
-                "INSERT INTO books (admin_id, uploaded_by, author_name, book_name,book_cover_url, category, published_date, subscription_price, book_division_type, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING book_id",
+                "INSERT INTO books (admin_id, uploaded_by, author_name, book_name, category, published_date, subscription_price, book_division_type, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING book_id",
                 admin_id,
                 uploaded_by,
                 author_name,
                 book_name,
-                book_cover_url,
                 category,
                 published_date,
                 subscription_price,
@@ -504,9 +565,8 @@ async def create_book(
             )  
             new_book_file = await conn.fetch(
                 "INSERT INTO book_files (book_id) VALUES ($1) RETURNING book_file_id",
-                new_book[0]["book_id"]
+                new_book[0]["book_id"],
             )
-            print(new_book_file[0]["book_file_id"])
             return new_book[0]["book_id"] , new_book_file[0]["book_file_id"]    
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while creating book row: " + str(e))
@@ -515,20 +575,52 @@ async def create_book(
 async def update_book_file(
     book_file_id : UUID,
     book_divisions: List[Dict[str, any]],
-    image_details: List[Dict[str, any]]
+    translation_details: Dict[str, any],
+    book_cover_url: Optional[str] = None,
+    total_pages: int = 0
 ) -> UUID:
     try:
         async with get_connection() as conn:
             row = await conn.fetch(
-                "UPDATE book_files SET book_divisions = $1, images_details = $2 WHERE book_file_id = $3",
+                "UPDATE book_files SET book_divisions = $1,pdf_file_url = $2 WHERE book_file_id = $3 RETURNING book_id",
                 json.dumps(book_divisions),
-                json.dumps(image_details),
+                json.dumps(translation_details),
                 book_file_id
             )
-
-            return row        
+            book_id = row[0]["book_id"]
+            row2 = await conn.fetch(
+                "UPDATE books SET book_cover_url = $1,pages = $2,chapters = $3 WHERE book_id = $4",
+                book_cover_url,
+                total_pages,
+                len(book_divisions),
+                book_id
+            )
+        return row        
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while updating book file row: " + str(e))
+
+
+async def update_book_pdf_url(book_file_id: UUID, pdf_file_url: str):
+    try:
+        async with get_connection() as conn:
+            await conn.execute(
+                "UPDATE book_files SET pdf_file_url = $1 WHERE book_file_id = $2",
+                pdf_file_url,
+                book_file_id
+            )
+    except Exception as e:
+        logger.error(f"Error updating book pdf url in DB: {e}")
+
+async def update_book_status(status:str,book_id: UUID):
+    try:
+        async with get_connection() as conn:
+            await conn.execute(
+                "UPDATE books SET status = $1 WHERE book_id = $2",
+                status,
+                book_id
+            )
+    except Exception as e:
+        logger.error(f"Error updating book status in DB: {e}")
 
 #-------------------------------------------- *CHAPTER DIVISION* ---------------------------------------------------
 api_key = os.getenv("OPENROUTER_API_KEY")
@@ -713,6 +805,7 @@ def extract_embedded_images(pdf_path: str) -> List[ExtractedImage]:
     downstream consumers can place images in their correct position rather
     than just knowing "this image came from this page."
     """
+    import fitz
     results: List[ExtractedImage] = []
     doc = fitz.open(pdf_path)
  
@@ -815,4 +908,119 @@ async def upload_embedded_image(book_id, image: ExtractedImage) -> str:
             status_code=500,
             detail=f"Error occurred while uploading embedded image (page {image.page_number}): {e}",
         )
- 
+
+
+
+
+LANG_CODE_MAP = {
+    "english": "EN",
+    "french": "FR",
+    "german": "DE",
+    "chinese": "ZH",
+    "spanish": "ES",
+    "portuguese": "PT-PT",
+    "italian": "IT",
+    "japanese": "JA",
+}
+
+
+def normalize_lang(lang: str) -> str:
+    key = lang.strip().lower()
+    return LANG_CODE_MAP.get(key, lang.upper())
+
+
+def translate_pdf(
+    input_path: str,
+    lang_out: str = "zh",
+    cloudinary_folder: str = "books/translated",
+) -> str:
+    """
+    Translate a single PDF via DeepL, upload the translated file to Cloudinary,
+    and return the Cloudinary secure URL.
+    """
+    deepl_api_key = os.getenv("DEEPL_API_KEY")
+    if not deepl_api_key:
+        raise RuntimeError("DEEPL_API_KEY environment variable not set")
+
+    base_url = (
+        "https://api-free.deepl.com"
+        if deepl_api_key.endswith(":fx")
+        else "https://api.deepl.com"
+    )
+
+    local_filename = "downloaded_book.pdf"
+
+    # Download source PDF
+    res = requests.get(input_path)
+    res.raise_for_status()
+    with open(local_filename, "wb") as f:
+        f.write(res.content)
+
+    headers = {"Authorization": f"DeepL-Auth-Key {deepl_api_key}"}
+    mime_type, _ = mimetypes.guess_type(local_filename)
+
+    # 1. Upload document to DeepL
+    with open(local_filename, "rb") as f:
+        files = {"file": (local_filename, f, mime_type or "application/pdf")}
+        data = {
+            "target_lang": normalize_lang(lang_out),
+            # "source_lang": normalize_lang(lang_in),
+        }
+        resp = requests.post(
+            f"{base_url}/v2/document", headers=headers, data=data, files=files
+        )
+
+    if not resp.ok:
+        print("DeepL error response:", resp.text)
+    resp.raise_for_status()
+
+    job = resp.json()
+    document_id = job["document_id"]
+    document_key = job["document_key"]
+
+    # 2. Poll for completion
+    status_url = f"{base_url}/v2/document/{document_id}"
+    while True:
+        status_resp = requests.post(
+            status_url, headers=headers, data={"document_key": document_key}
+        )
+        status_resp.raise_for_status()
+        status = status_resp.json()
+
+        if status["status"] == "done":
+            break
+        if status["status"] == "error":
+            raise RuntimeError(f"DeepL translation failed: {status}")
+
+        time.sleep(status.get("seconds_remaining", 5))
+
+    # 3. Download translated result
+    result_url = f"{base_url}/v2/document/{document_id}/result"
+    result_resp = requests.post(
+        result_url, headers=headers, data={"document_key": document_key}
+    )
+    result_resp.raise_for_status()
+
+    translated_local_path = "translated_" + local_filename
+    with open(translated_local_path, "wb") as f:
+        f.write(result_resp.content)
+
+    # 4. Upload translated PDF to Cloudinary
+    upload_result = cloudinary.uploader.upload(
+        translated_local_path,
+        resource_type="image",  # matches how your original PDF was uploaded (/image/upload/)
+        folder=cloudinary_folder,
+        use_filename=True,
+        unique_filename=True,
+        overwrite=False,
+    )
+
+    # 5. Clean up local temp files
+    for path in (local_filename, translated_local_path):
+        if os.path.exists(path):
+            os.remove(path)
+
+    return upload_result["secure_url"]
+
+# translate_pdf("https://res.cloudinary.com/dcvpbxqob/image/upload/v1784389820/books/3fef4149-53e2-45fc-bf95-d488dad11e67/id1p2tddjbzkkay3fein.pdf","EN","FR")
+
