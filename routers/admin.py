@@ -215,7 +215,7 @@ async def apply_book_request_update(update_book_request: "Update_book_request"):
 @router.put("/update_book_request")
 async def update_book_request(
     update_book_request: Update_book_request,
-    current_user: dict = Depends(require_role("admin", "super-admin"))
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Update the status of a book request. can only be accessed by admins
