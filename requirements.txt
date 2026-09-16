@@ -23,4 +23,6 @@ pytesseract
 pillow
 requests
 # fitz
+supabase
+openai
 

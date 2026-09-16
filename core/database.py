@@ -12,6 +12,8 @@ pool: asyncpg.Pool | None = None
 
 async def init_db_pool():
     global pool
+    if pool is not None and not getattr(pool, "_closed", False):
+        await pool.close()
     pool = await asyncpg.create_pool(
         dsn=DATABASE_URL,
         min_size=1,
@@ -20,13 +22,27 @@ async def init_db_pool():
     )
 
 async def close_db_pool():
+    global pool
     if pool:
         await pool.close()
+        pool = None
 
 @asynccontextmanager
 async def get_connection():
-    async with pool.acquire() as conn:
-        yield conn
+    global pool
+
+    if pool is None or getattr(pool, "_closed", False):
+        await init_db_pool()
+
+    try:
+        async with pool.acquire() as conn:
+            yield conn
+    except (asyncpg.exceptions.ConnectionDoesNotExistError, RuntimeError):
+        # Pool may have been closed during a hot reload or app shutdown while a
+        # background task was still running.
+        await init_db_pool()
+        async with pool.acquire() as conn:
+            yield conn
         
         
         PAYFAST_MERCHANT_ID = os.environ["PAYFAST_MERCHANT_ID"]

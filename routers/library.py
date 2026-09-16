@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
-
+from pydantic import BaseModel
+import json
 from core.database import get_connection
 from core.security import get_current_user
 
@@ -37,3 +38,43 @@ async def get_my_library(current_user: dict = Depends(get_current_user)):
         )
 
     return [dict(r) for r in rows]
+
+@router.get("/reading_settings")
+async def get_reader_settings(current_user: dict = Depends(get_current_user)):
+    async with get_connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT reading_settings
+            FROM users
+            WHERE user_id = $1
+            """,
+            current_user["user_id"],
+        )
+
+    return [dict(r) for r in rows]
+
+class Settings(BaseModel):
+    theme: str
+    fontSize: int
+    fontFamily: str
+    textColor: str
+    bgColor: str
+
+@router.post("/reading_settings")
+async def save_reading_settings(
+    settings: Settings = None,
+    current_user: dict = Depends(get_current_user)
+    ): 
+
+    async with get_connection() as conn:
+        await conn.execute(
+            """
+            UPDATE users
+            SET reading_settings = $1::jsonb
+            WHERE user_id = $2
+            """,
+            settings.model_dump_json(),
+            current_user["user_id"],
+        )
+
+    return {"message": "Reading settings saved successfully"}

@@ -27,8 +27,6 @@ async def get_admin(
     """
 
     try:
-        #logic to check if the user is a super admin
-        
         async with get_connection() as conn:
             row = await conn.fetch(
                 "SELECT fullname,email,role FROM users WHERE role = 'admin' OR role = 'super-admin'"
@@ -262,6 +260,23 @@ async def get_admin_books(admin_id:str):
         return row
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error occurred while fetching admin books: " + str(e))
+
+@router.get("/book_status/{book_id}")
+async def get_book_status(book_id: str):
+    """Check the status of a book"""
+    try:
+        async with get_connection() as conn:
+            row = await conn.fetch(
+                "SELECT * FROM books WHERE book_id = $1",
+                book_id
+            )
+        if row:
+            return {"book_id": row[0]["book_id"], "status": row[0]["status"]}
+        else:
+            raise HTTPException(status_code=404, detail="Book not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error occurred while checking book status: " + str(e))
+
 #move to users
 
 class Book_request(BaseModel):
