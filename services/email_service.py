@@ -17,7 +17,8 @@ def send_email(email: str, reason: str, user_name: str = "Reader", book_title: s
         "decline_request":"Your book request payment has been reviewed",
         "accept_request": "Your book request payment has been reviewed",
         "send_request": "New book request",
-        "confirm_request": "Your book request has been confirmed"
+        "confirm_request": "Your book request has been confirmed",
+        "payfast_confirmation": "Your PayFast payment was successful"
     }
     # Add password reset subject
     subjects["reset_password"] = "Reset your LITN password"
@@ -47,6 +48,11 @@ def send_email(email: str, reason: str, user_name: str = "Reader", book_title: s
             "heading": "Your book request has been confirmed",
             "par1": f"Your book request for '{book_title}'",
             "par2": "Your request is confirmed and will be available in your library very soon. Thank you for using our service!",
+        },
+        "payfast_confirmation": {
+        "heading": "Payment received — you're all set!",
+        "par1": f"Your PayFast payment for '{book_title}' was successful",
+        "par2": "Thank you for your payment. Your subscription is now active and the book has been added to your library — happy reading!",
         }
     }
     # Add reset password template vars
